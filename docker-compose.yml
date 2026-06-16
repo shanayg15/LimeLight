@@ -1,0 +1,23 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: limelight-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: limelight
+      POSTGRES_PASSWORD: limelight
+      POSTGRES_DB: limelight
+    ports:
+      # Host 5446 -> container 5432 (5432 is often taken by other local Postgres instances)
+      - "5446:5432"
+    volumes:
+      - limelight-pgdata:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U limelight -d limelight"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  limelight-pgdata:
