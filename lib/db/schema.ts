@@ -362,3 +362,31 @@ export const schedules = pgTable(
 );
 
 export type Schedule = typeof schedules.$inferSelect;
+
+// ── M8 (optional): agent analytics — AI referrals + bot traffic ──────────
+
+export type AnalyticsEventType = "referral" | "bot";
+
+/** Coarse, non-PII web analytics: AI human referrals + AI crawler hits. */
+export const analyticsEvents = pgTable(
+  "analytics_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subjectId: uuid("subject_id")
+      .notNull()
+      .references(() => subjects.id, { onDelete: "cascade" }),
+    type: text("type").notNull().$type<AnalyticsEventType>(),
+    /** Which AI engine the referral/crawler maps to (or 'unknown'). */
+    engine: text("engine").notNull().default("unknown"),
+    /** Path only (query stripped). No PII. */
+    path: text("path"),
+    /** Referrer HOST only (not the full URL). */
+    referrer: text("referrer"),
+    /** Coarse, truncated user-agent. */
+    userAgent: text("user_agent"),
+    ts: timestamp("ts", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("analytics_events_subject_idx").on(t.subjectId)],
+);
+
+export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
