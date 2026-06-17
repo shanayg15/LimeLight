@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { PenLine, Wrench, Award, MessagesSquare, ChevronDown, ExternalLink } from "lucide-react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { PenLine, Wrench, Award, MessagesSquare, ChevronDown, ExternalLink, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { Impact, Effort, Opportunity, OpportunityKind } from "@/lib/core/actions";
 import type { OpportunitiesState } from "@/lib/actions/opportunities";
+import { generateContentAction } from "@/lib/actions/content";
 
 const KIND_META: Record<OpportunityKind, { label: string; icon: typeof PenLine; blurb: string }> = {
   create: { label: "Create", icon: PenLine, blurb: "Write new citable content" },
@@ -87,9 +90,22 @@ function FilterChip({
 }
 
 function OpportunityCard({ o }: { o: Opportunity }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [drafting, startDraft] = useTransition();
   const Icon = KIND_META[o.kind].icon;
   const isContent = o.kind === "create" || o.kind === "improve";
+
+  const draft = () =>
+    startDraft(async () => {
+      try {
+        const { draftId } = await generateContentAction(o.id);
+        toast.success("Draft created.");
+        router.push(`/app/content/${draftId}`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Couldn't generate a draft.");
+      }
+    });
   const evidenceCount =
     (o.evidence.prompts?.length ?? 0) + (o.evidence.sources?.length ?? 0) + (o.evidence.findings?.length ?? 0);
 
@@ -169,14 +185,13 @@ function OpportunityCard({ o }: { o: Opportunity }) {
 
           {isContent && (
             <div className="mt-3">
-              {/* M5: stubbed entry point. M6 wires this to generateContent. */}
               <button
-                disabled
-                title="Coming in the content milestone"
-                className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground opacity-70"
+                onClick={draft}
+                disabled={drafting}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-xs font-medium hover:bg-secondary disabled:opacity-60"
               >
-                <PenLine className="size-3.5" />
-                Draft content (coming soon)
+                {drafting ? <Loader2 className="size-3.5 animate-spin" /> : <PenLine className="size-3.5" />}
+                {drafting ? "Drafting… (crawling + generating)" : "Draft content"}
               </button>
             </div>
           )}

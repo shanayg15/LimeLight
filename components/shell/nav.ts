@@ -30,7 +30,7 @@ export const navItems: NavItem[] = [
   { label: "Sources", href: "/app/sources", icon: Link2, enabled: true },
   { label: "Site audit", href: "/app/site-audit", icon: FileSearch, enabled: true },
   { label: "Actions", href: "/app/actions", icon: Sparkles, enabled: true },
-  { label: "Content", href: "/app/content", icon: FileText, enabled: false },
+  { label: "Content", href: "/app/content", icon: FileText, enabled: true },
   { label: "Tracking", href: "/app/tracking", icon: TrendingUp, enabled: false },
   { label: "Assistant", href: "/app/assistant", icon: Bot, enabled: false },
   { label: "Settings", href: "/app/settings", icon: Settings, enabled: true },
