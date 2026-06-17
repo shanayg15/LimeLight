@@ -120,22 +120,8 @@ export async function regenerateDraftAction(draftId: string): Promise<{ ok: bool
   const { draft } = await loadOwnedDraft(draftId, user.id);
   if (!draft.opportunityId) return { ok: false, message: "This draft has no source opportunity to regenerate from." };
   try {
-    const newId = await generateContent(draft.subjectId, draft.opportunityId);
-    const [fresh] = await db.select().from(contentDrafts).where(eq(contentDrafts.id, newId)).limit(1);
-    // Overwrite the existing draft with the fresh content, then drop the temp row.
-    await db
-      .update(contentDrafts)
-      .set({
-        title: fresh.title,
-        bodyMd: fresh.bodyMd,
-        faq: fresh.faq,
-        jsonLd: fresh.jsonLd,
-        source: fresh.source,
-        status: "draft",
-        updatedAt: new Date(),
-      })
-      .where(eq(contentDrafts.id, draftId));
-    if (newId !== draftId) await db.delete(contentDrafts).where(eq(contentDrafts.id, newId));
+    // In-place atomic update — no temp row to orphan.
+    await generateContent(draft.subjectId, draft.opportunityId, draftId);
     revalidatePath(`/app/content/${draftId}`);
     return { ok: true };
   } catch (e) {

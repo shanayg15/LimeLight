@@ -11,6 +11,26 @@ import { validateJsonLd } from "@/lib/schema";
 export type ExportFormat = "md" | "html" | "jsonld";
 export type ExportFile = { filename: string; mime: string; content: string };
 
+export class SchemaInvalidError extends Error {
+  constructor(public errors: string[]) {
+    super(`Refusing to export invalid JSON-LD: ${errors.join("; ")}`);
+    this.name = "SchemaInvalidError";
+  }
+}
+
+/**
+ * Serialize JSON for embedding inside a <script> element. Escapes `<`, `>`, `&`
+ * to their \\uXXXX JSON escapes so a string value containing `</script>` or
+ * `<!--` can't break out of the tag (stored-injection into the exported file).
+ * The result is still valid JSON-LD (\\u003c parses back to `<`).
+ */
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026");
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -105,10 +125,11 @@ export function renderHtml(
         .map((f) => `<div><h3>${escapeHtml(f.question)}</h3><p>${escapeHtml(f.answer)}</p></div>`)
         .join("")}</section>`
     : "";
-  // Embed JSON-LD only when it validates — never ship unvalidated schema.
+  // Embed JSON-LD only when it validates — never ship unvalidated schema. The
+  // serialized JSON is script-escaped so a string value can't break out of the tag.
   const schemaOk = draft.jsonLd != null && validateJsonLd(draft.jsonLd).valid;
   const ldScript = schemaOk
-    ? `<script type="application/ld+json">\n${JSON.stringify(draft.jsonLd, null, 2)}\n</script>`
+    ? `<script type="application/ld+json">\n${jsonForScript(draft.jsonLd)}\n</script>`
     : "";
 
   return `<!DOCTYPE html>
@@ -130,7 +151,11 @@ ${faqHtml}
 }
 
 export function renderJsonLd(draft: Pick<ContentDraft, "jsonLd">): string {
-  return `${JSON.stringify(draft.jsonLd ?? {}, null, 2)}\n`;
+  // The .jsonld file is pasted verbatim onto a site — refuse to emit invalid
+  // (or empty) schema. "Invalid JSON-LD is worse than none."
+  const v = validateJsonLd(draft.jsonLd);
+  if (draft.jsonLd == null || !v.valid) throw new SchemaInvalidError(v.errors);
+  return `${JSON.stringify(draft.jsonLd, null, 2)}\n`;
 }
 
 // ── Confirm-gated DB wrapper ──────────────────────────────────────────────

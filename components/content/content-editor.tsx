@@ -31,7 +31,9 @@ import {
 } from "@/lib/actions/content";
 
 function escapeHtml(s: string) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Escape the double-quote too — link URLs are injected into href="..." and a
+  // stray quote would let markdown like [x](https://a" onmouseover="…) inject an attribute.
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 /** Minimal, safe Markdown preview (headings, lists, paragraphs, bold/italic/links). */
 function mdPreview(md: string): string {

@@ -58,15 +58,29 @@ export function parseGeneratedContent(raw: string): GeneratedContent {
  * (matched by question) or, if missing, a clearly-marked placeholder — never a
  * fabricated fact.
  */
+/** Normalize a question for matching (trailing punctuation + smart quotes vary). */
+function normalizeQuestion(q: string): string {
+  return q
+    .trim()
+    .toLowerCase()
+    .replace(/[?!.]+$/g, "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ");
+}
+
 function buildFaq(weakPrompts: string[], answers: { question: string; answer: string }[]): FaqItem[] {
-  const byQ = new Map(answers.map((a) => [a.question.trim().toLowerCase(), a.answer.trim()]));
-  return weakPrompts
-    .map((q) => q.trim())
-    .filter(Boolean)
-    .map((question) => ({
-      question,
-      answer: byQ.get(question.toLowerCase()) || "Answer this directly from your own experience and facts.",
-    }));
+  const byQ = new Map(answers.map((a) => [normalizeQuestion(a.question), a.answer.trim()]));
+  const questions = weakPrompts.map((q) => q.trim()).filter(Boolean);
+  return questions.map((question, i) => ({
+    question,
+    // Match by normalized question; fall back to positional pairing; then a
+    // clearly-marked placeholder — never a fabricated fact.
+    answer:
+      byQ.get(normalizeQuestion(question)) ||
+      answers[i]?.answer?.trim() ||
+      "Answer this directly from your own experience and facts.",
+  }));
 }
 
 const SCAFFOLD_NOTE =
@@ -187,7 +201,11 @@ const MAX_WEAK_PROMPTS = 6;
  * pages + top cited pages (politely, reusing M5's crawler), ingests embeddings,
  * retrieves grounding, generates (or scaffolds keyless), validates schema, saves.
  */
-export async function generateContent(subjectId: string, opportunityId: string): Promise<string> {
+export async function generateContent(
+  subjectId: string,
+  opportunityId: string,
+  existingDraftId?: string,
+): Promise<string> {
   const { db } = await import("@/lib/db/client");
   const { subjects, contentDrafts } = await import("@/lib/db/schema");
   const { getOpportunitiesForSubject } = await import("@/lib/core/content-context");
@@ -207,11 +225,20 @@ export async function generateContent(subjectId: string, opportunityId: string):
   }
 
   const weakPrompts = (found.evidence.prompts ?? []).slice(0, MAX_WEAK_PROMPTS);
-  // Backfill questions from the subject's prompts on the topic if the gap had few.
+  // Finding-based Improve opportunities (schema/structure) carry no weak prompt.
+  // Backfill from the subject's ENABLED prompts (the ones actually audited),
+  // preferring the target topic, deterministically ordered — never arbitrary rows.
   if (weakPrompts.length === 0) {
     const { prompts } = await import("@/lib/db/schema");
-    const rows = await db.select({ text: prompts.text }).from(prompts).where(eq(prompts.subjectId, subjectId));
-    weakPrompts.push(...rows.slice(0, 3).map((r) => r.text));
+    const { and, asc } = await import("drizzle-orm");
+    const rows = await db
+      .select({ text: prompts.text, topic: prompts.topic })
+      .from(prompts)
+      .where(and(eq(prompts.subjectId, subjectId), eq(prompts.enabled, true)))
+      .orderBy(asc(prompts.createdAt));
+    const topic = found.targetTopic?.trim().toLowerCase();
+    const onTopic = topic ? rows.filter((r) => r.topic?.trim().toLowerCase() === topic) : [];
+    weakPrompts.push(...(onTopic.length ? onTopic : rows).slice(0, 3).map((r) => r.text));
   }
 
   const opp: OpportunitySeed = {
@@ -265,21 +292,24 @@ export async function generateContent(subjectId: string, opportunityId: string):
   }
 
   const assembled = assembleDraft(schemaSubject, opp, gen, retrieved);
+  const values = {
+    subjectId,
+    opportunityId: opp.id,
+    kind: opp.kind,
+    title: assembled.title,
+    bodyMd: assembled.bodyMd,
+    faq: assembled.faq,
+    jsonLd: assembled.jsonLd,
+    status: "draft" as const,
+    targetTopic: opp.targetTopic,
+    source: assembled.source,
+  };
 
-  const [row] = await db
-    .insert(contentDrafts)
-    .values({
-      subjectId,
-      opportunityId: opp.id,
-      kind: opp.kind,
-      title: assembled.title,
-      bodyMd: assembled.bodyMd,
-      faq: assembled.faq,
-      jsonLd: assembled.jsonLd,
-      status: "draft",
-      targetTopic: opp.targetTopic,
-      source: assembled.source,
-    })
-    .returning({ id: contentDrafts.id });
+  // Regenerate updates the row IN PLACE (atomic single write, no temp-row swap).
+  if (existingDraftId) {
+    await db.update(contentDrafts).set({ ...values, updatedAt: new Date() }).where(eq(contentDrafts.id, existingDraftId));
+    return existingDraftId;
+  }
+  const [row] = await db.insert(contentDrafts).values(values).returning({ id: contentDrafts.id });
   return row.id;
 }

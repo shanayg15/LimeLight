@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { embeddings, EMBEDDING_DIM, type EmbeddingSourceType } from "@/lib/db/schema";
 
 /**
@@ -14,6 +14,8 @@ import { embeddings, EMBEDDING_DIM, type EmbeddingSourceType } from "@/lib/db/sc
 export const EMBEDDING_MODEL = "text-embedding-3-small";
 const MAX_CHUNK_CHARS = 1200;
 const MAX_CHUNKS_PER_PAGE = 10;
+/** Cap candidate chunks scanned by the keyless lexical fallback. */
+const LEXICAL_CANDIDATE_CAP = 400;
 
 // ── Pure cores ────────────────────────────────────────────────────────────
 
@@ -188,7 +190,9 @@ export async function retrieveChunks(
 
   if (hasVectors.length > 0 && opts.apiKey) {
     const qv = await embedTexts([query], opts.apiKey).catch(() => null);
-    if (qv?.[0]) {
+    // Guard the query dimension — a mismatched-dim literal makes Postgres throw.
+    // On mismatch fall through to lexical instead of crashing or returning nothing.
+    if (qv?.[0] && qv[0].length === EMBEDDING_DIM) {
       const literal = `[${qv[0].join(",")}]`;
       const ranked = await db
         .select({ id: embeddings.id, url: embeddings.url, sourceType: embeddings.sourceType, content: embeddings.content })
@@ -200,10 +204,13 @@ export async function retrieveChunks(
     }
   }
 
-  // Lexical fallback over all of the subject's chunks.
+  // Lexical fallback over the subject's chunks. Bound the candidate set (most
+  // recent first) so a heavily-ingested subject can't load unbounded rows.
   const rows = await db
     .select({ id: embeddings.id, url: embeddings.url, sourceType: embeddings.sourceType, content: embeddings.content })
     .from(embeddings)
-    .where(eq(embeddings.subjectId, subjectId));
+    .where(eq(embeddings.subjectId, subjectId))
+    .orderBy(desc(embeddings.createdAt))
+    .limit(LEXICAL_CANDIDATE_CAP);
   return lexicalRank(query, rows, k);
 }

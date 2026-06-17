@@ -104,10 +104,17 @@ export function validateJsonLd(jsonLd: unknown): SchemaValidation {
     return { valid: false, errors: ["Schema is empty or not an object."] };
   }
   const root = jsonLd as Record<string, unknown>;
-  const graph = root["@graph"];
-  if (Array.isArray(graph)) {
-    if (graph.length === 0) errors.push("@graph is empty.");
-    graph.forEach((node, i) => validateNode(node, errors, `@graph[${i}]`));
+  if ("@graph" in root) {
+    // An object carrying @graph is a graph wrapper — it MUST be an array, else
+    // the payload would slip through unvalidated.
+    const graph = root["@graph"];
+    if (!Array.isArray(graph)) {
+      errors.push("@graph must be an array.");
+    } else if (graph.length === 0) {
+      errors.push("@graph is empty.");
+    } else {
+      graph.forEach((node, i) => validateNode(node, errors, `@graph[${i}]`));
+    }
   } else {
     validateNode(root, errors, "root");
   }
