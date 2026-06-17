@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   doublePrecision,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -9,6 +10,7 @@ import {
   timestamp,
   unique,
   uuid,
+  vector,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -267,3 +269,64 @@ export const siteAudits = pgTable("site_audits", {
 });
 
 export type SiteAudit = typeof siteAudits.$inferSelect;
+
+// ── M6: embeddings (pgvector) + content drafts ───────────────────────────
+
+export type EmbeddingSourceType = "own_page" | "cited_page";
+
+/**
+ * text-embedding-3-small is 1536-dim. `embedding` is nullable: in the keyless
+ * path we still store the chunk text and retrieve lexically (real grounding over
+ * the user's own data — never fabrication), backfilling vectors when a key exists.
+ */
+export const EMBEDDING_DIM = 1536;
+
+export const embeddings = pgTable(
+  "embeddings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subjectId: uuid("subject_id")
+      .notNull()
+      .references(() => subjects.id, { onDelete: "cascade" }),
+    sourceType: text("source_type").notNull().$type<EmbeddingSourceType>(),
+    url: text("url").notNull(),
+    topic: text("topic"),
+    chunkIdx: integer("chunk_idx").notNull().default(0),
+    content: text("content").notNull(),
+    embedding: vector("embedding", { dimensions: EMBEDDING_DIM }),
+    /** Embedding model id, or 'lexical' when stored without a vector. */
+    model: text("model").notNull().default("lexical"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("embeddings_subject_idx").on(t.subjectId),
+    // HNSW cosine index for the vector path (skips null embeddings).
+    index("embeddings_vector_idx").using("hnsw", t.embedding.op("vector_cosine_ops")),
+  ],
+);
+
+export type ContentKind = "create" | "improve";
+export type DraftStatus = "draft" | "approved" | "exported";
+export type FaqItem = { question: string; answer: string };
+
+export const contentDrafts = pgTable("content_drafts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  subjectId: uuid("subject_id")
+    .notNull()
+    .references(() => subjects.id, { onDelete: "cascade" }),
+  opportunityId: text("opportunity_id"),
+  kind: text("kind").notNull().$type<ContentKind>(),
+  title: text("title").notNull(),
+  bodyMd: text("body_md").notNull().default(""),
+  faq: jsonb("faq").notNull().$type<FaqItem[]>().default(sql`'[]'::jsonb`),
+  jsonLd: jsonb("json_ld").$type<unknown>(),
+  status: text("status").notNull().default("draft").$type<DraftStatus>(),
+  targetTopic: text("target_topic"),
+  /** 'model' = LLM-generated; 'scaffold' = keyless grounded scaffold (no invented facts). */
+  source: text("source").notNull().default("model"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+export type Embedding = typeof embeddings.$inferSelect;
+export type ContentDraft = typeof contentDrafts.$inferSelect;
