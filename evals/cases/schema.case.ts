@@ -54,4 +54,10 @@ describe("validateJsonLd — catches malformed schema before export", () => {
     expect(validateJsonLd(null).valid).toBe(false);
     expect(validateJsonLd({ "@graph": [] }).valid).toBe(false);
   });
+
+  it("rejects a non-array @graph instead of silently validating the root (regression)", () => {
+    const r = validateJsonLd({ "@context": "https://schema.org", "@type": "Person", name: "Ada", "@graph": { junk: 1 } });
+    expect(r.valid).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/@graph must be an array/i);
+  });
 });

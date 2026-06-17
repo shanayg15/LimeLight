@@ -6,7 +6,7 @@ import {
   parseGeneratedContent,
   type OpportunitySeed,
 } from "@/lib/core/content";
-import { renderHtml, renderMarkdown, renderExport } from "@/lib/core/content-export";
+import { renderHtml, renderMarkdown, renderExport, renderJsonLd, SchemaInvalidError } from "@/lib/core/content-export";
 import { validateJsonLd } from "@/lib/schema";
 import {
   SUBJECT,
@@ -109,5 +109,37 @@ describe("export integrity — MD/HTML/JSON-LD", () => {
     expect(renderExport(full, "html").mime).toBe("text/html");
     expect(renderExport(full, "jsonld").mime).toBe("application/ld+json");
     expect(renderExport(full, "md").filename).toMatch(/\.md$/);
+  });
+});
+
+describe("M6 review regressions", () => {
+  it("renderJsonLd refuses to emit invalid/empty schema", () => {
+    expect(() => renderJsonLd({ jsonLd: null })).toThrow(SchemaInvalidError);
+    expect(() => renderJsonLd({ jsonLd: { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: [] } })).toThrow(
+      SchemaInvalidError,
+    );
+    const valid = { "@context": "https://schema.org", "@type": "Person", name: "Ada" };
+    expect(renderJsonLd({ jsonLd: valid })).toContain('"@type"');
+  });
+
+  it("HTML export script-escapes a </script> payload (no tag breakout) but stays valid JSON-LD", () => {
+    const evil = "</script><img src=x onerror=alert(1)>";
+    const a = assembleDraft(
+      SUBJECT,
+      { ...OPP, weakPrompts: ["Q?"] },
+      { title: "T", articleMd: "# T\n\nbody", answers: [{ question: "Q?", answer: `Safe ${evil}` }] },
+      [],
+    );
+    const html = renderHtml({ title: a.title, bodyMd: a.bodyMd, faq: a.faq, jsonLd: a.jsonLd });
+    const m = html.match(/<script type="application\/ld\+json">\n([\s\S]*?)\n<\/script>/);
+    expect(m).toBeTruthy();
+    expect(m![1]).not.toContain("</script>"); // payload neutralized in the embed
+    expect(validateJsonLd(JSON.parse(m![1])).valid).toBe(true); // still valid + parseable
+  });
+
+  it("FAQ answer matches a near-verbatim question (missing trailing '?')", () => {
+    const gen = { title: "T", articleMd: "# T", answers: [{ question: "Who is Ada Lovelace", answer: "A mathematician." }] };
+    const d = assembleDraft(SUBJECT, { ...OPP, weakPrompts: ["Who is Ada Lovelace?"] }, gen, []);
+    expect(d.faq[0].answer).toBe("A mathematician.");
   });
 });
