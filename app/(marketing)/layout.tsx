@@ -13,7 +13,10 @@ export default function MarketingLayout({
         <Link href="/" aria-label="Limelight home">
           <Logo />
         </Link>
-        <nav className="flex items-center gap-2">
+        <nav className="flex items-center gap-1 sm:gap-2">
+          <Link href="/pricing" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+            Pricing
+          </Link>
           <Link href="/login" className={buttonVariants({ variant: "ghost", size: "sm" })}>
             Log in
           </Link>
@@ -24,7 +27,11 @@ export default function MarketingLayout({
       </header>
       <div className="flex-1">{children}</div>
       <footer className="border-t border-border py-6 text-center text-xs text-muted-foreground">
-        Limelight · open-source AI-visibility auditor · MIT
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-4 gap-y-1 px-6">
+          <span>Limelight · open-source AI-visibility auditor · MIT</span>
+          <Link href="/pricing" className="hover:text-foreground">Pricing</Link>
+          <a href="https://github.com/shanayg15/LimeLight" target="_blank" rel="noopener noreferrer" className="hover:text-foreground">GitHub</a>
+        </div>
       </footer>
     </div>
   );

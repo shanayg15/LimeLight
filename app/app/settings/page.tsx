@@ -9,6 +9,7 @@ import type { EngineId } from "@/lib/db/schema";
 import { SubjectSettings } from "@/components/subjects/subject-settings";
 import { ProviderKeys } from "@/components/settings/provider-keys";
 import { AuditSettings } from "@/components/settings/audit-settings";
+import { DataManagement } from "@/components/settings/data-management";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -92,6 +93,31 @@ export default async function SettingsPage() {
             allEngines={settings.allEngines}
             enginesWithKey={enginesWithKey}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Scheduled tracking</CardTitle>
+          <CardDescription>
+            Re-run audits on a schedule and opt in to a weekly digest — configured per subject on the
+            Tracking page.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link href="/app/tracking" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            Manage tracking &amp; digest
+          </Link>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Your data</CardTitle>
+          <CardDescription>Export everything, or delete your data / account. Deletes are permanent.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataManagement />
         </CardContent>
       </Card>
     </div>
