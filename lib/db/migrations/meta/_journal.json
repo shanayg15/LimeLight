@@ -43,6 +43,13 @@
       "when": 1781707900471,
       "tag": "0005_stiff_blue_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781709436315,
+      "tag": "0006_burly_winter_soldier",
+      "breakpoints": true
     }
   ]
 }

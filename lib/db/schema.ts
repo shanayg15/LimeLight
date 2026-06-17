@@ -133,6 +133,8 @@ export const auditRuns = pgTable("audit_runs", {
   costActualUsd: doublePrecision("cost_actual_usd"),
   // Cached aggregate scores (also derivable from rows).
   scores: jsonb("scores").$type<AuditScores>(),
+  /** Set when this run was created by the M7 scheduled-tracking cron. */
+  scheduleId: uuid("schedule_id"),
   promptsTotal: integer("prompts_total").notNull().default(0),
   promptsDone: integer("prompts_done").notNull().default(0),
   error: text("error"),
@@ -330,3 +332,33 @@ export const contentDrafts = pgTable("content_drafts", {
 
 export type Embedding = typeof embeddings.$inferSelect;
 export type ContentDraft = typeof contentDrafts.$inferSelect;
+
+// ── M7: scheduled tracking + digests ─────────────────────────────────────
+
+export type Cadence = "weekly" | "biweekly" | "monthly";
+export type ScheduleChannels = { email: boolean };
+
+export const schedules = pgTable(
+  "schedules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subjectId: uuid("subject_id")
+      .notNull()
+      .references(() => subjects.id, { onDelete: "cascade" }),
+    cadence: text("cadence").notNull().default("weekly").$type<Cadence>(),
+    enabled: boolean("enabled").notNull().default(false),
+    engines: jsonb("engines").notNull().$type<EngineId[]>().default(sql`'[]'::jsonb`),
+    samples: integer("samples").notNull().default(3),
+    channels: jsonb("channels").notNull().$type<ScheduleChannels>().default(sql`'{"email":false}'::jsonb`),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true, mode: "date" }),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true, mode: "date" }),
+    /** Why the most recent due run was skipped (e.g. over the cost cap). */
+    lastSkipReason: text("last_skip_reason"),
+    lastSkipAt: timestamp("last_skip_at", { withTimezone: true, mode: "date" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [unique("schedules_subject_uniq").on(t.subjectId)],
+);
+
+export type Schedule = typeof schedules.$inferSelect;

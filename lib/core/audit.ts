@@ -53,6 +53,7 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
 export async function runAudit(
   subjectId: string,
   config: AuditConfig,
+  opts: { scheduleId?: string } = {},
 ): Promise<{ auditRunId: string; estimateUsd: number; promptCount: number }> {
   const enabled = await db
     .select({ id: promptsT.id })
@@ -70,6 +71,7 @@ export async function runAudit(
       costEstimateUsd: estimateUsd,
       promptsTotal: promptCount,
       promptsDone: 0,
+      scheduleId: opts.scheduleId ?? null,
     })
     .returning({ id: auditRuns.id });
 
