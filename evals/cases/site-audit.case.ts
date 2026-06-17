@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseHtml } from "@/lib/crawl/parse";
-import { evaluateReadiness } from "@/lib/core/site-audit";
+import { computeTopicCoverage, evaluateReadiness } from "@/lib/core/site-audit";
 import { aiCrawlersBlocked, isPathAllowed, parseRobots } from "@/lib/crawl/robots";
-import { isPrivateIPv4, UrlValidationError, validatePublicUrl } from "@/lib/crawl/ssrf";
+import { isBlockedIPv6, isPrivateIPv4, UrlValidationError, validatePublicUrl } from "@/lib/crawl/ssrf";
 import { RICH_PAGE_HTML, THIN_PAGE_HTML, ROBOTS_TXT } from "@/evals/fixtures/site-pages";
 
 const SUBJECT = { name: "Ada Lovelace", aliases: [], topics: ["mathematics", "analytical engines"] };
@@ -128,5 +128,67 @@ describe("SSRF guard — validatePublicUrl rejects non-public targets (no networ
     expect(isPrivateIPv4("172.20.0.1")).toBe(true);
     expect(isPrivateIPv4("172.32.0.1")).toBe(false); // outside 172.16/12
     expect(isPrivateIPv4("169.254.169.254")).toBe(true);
+  });
+
+  it("blocks IPv4-in-IPv6 even when the URL parser normalizes to hex (regression)", () => {
+    // WHATWG URL normalizes [::ffff:127.0.0.1] → [::ffff:7f00:1]; both must block.
+    expect(isBlockedIPv6("::ffff:7f00:1")).toBe(true); // 127.0.0.1 mapped (hex)
+    expect(isBlockedIPv6("::ffff:127.0.0.1")).toBe(true); // dotted form
+    expect(isBlockedIPv6("::ffff:a9fe:a9fe")).toBe(true); // 169.254.169.254 metadata
+    expect(isBlockedIPv6("::127.0.0.1")).toBe(true); // IPv4-compatible
+    expect(isBlockedIPv6("64:ff9b::7f00:1")).toBe(true); // NAT64 → 127.0.0.1
+    expect(isBlockedIPv6("::ffff:8.8.8.8")).toBe(false); // public embedded v4 is fine
+    for (const u of ["http://[::ffff:127.0.0.1]/", "http://[::ffff:169.254.169.254]/", "http://[64:ff9b::7f00:1]/"]) {
+      expect(() => validatePublicUrl(u), u).toThrow(UrlValidationError);
+    }
+  });
+
+  it("blocks trailing-dot FQDN forms of internal hosts (regression)", () => {
+    for (const u of ["http://localhost.", "https://db.internal.", "https://api.local."]) {
+      expect(() => validatePublicUrl(u), u).toThrow(UrlValidationError);
+    }
+  });
+});
+
+describe("scoring edge cases the M5 review surfaced", () => {
+  const SUBJ_NO_TOPICS = { name: "Ada Lovelace", aliases: [], topics: [] };
+
+  it("does not mislabel a thin-but-server-rendered page as JavaScript-only (regression)", () => {
+    // ~200 chars of real server text + an analytics script: server-rendered, just thin.
+    const html = `<html><head><title>Ada Lovelace</title></head><body><h1>Ada Lovelace</h1><p>${"Ada Lovelace is a mathematician who studied analytical engines and wrote the first algorithm for them, influencing modern computing history. ".repeat(2)}</p><script src="/analytics.js"></script></body></html>`;
+    const page = parseHtml(html, "https://x.example/", "https://x.example");
+    const r = evaluateReadiness({ pages: [page], robotsFetched: true, aiCrawlersBlocked: [], hasSitemap: true, subject: SUBJ_NO_TOPICS });
+    expect(r.readable).toBe(true);
+    expect(r.findings.some((f) => f.id === "client-rendered")).toBe(false);
+  });
+
+  it("does not bank free topic points for a site with no topics (renormalized weights)", () => {
+    // Unreadable site + subject with no topics: must NOT inflate via a default-1.0 topics score.
+    const unreadable = evaluateReadiness({
+      pages: [parseHtml(THIN_PAGE_HTML, "https://x.example/", "https://x.example")],
+      robotsFetched: true,
+      aiCrawlersBlocked: [],
+      hasSitemap: true,
+      subject: SUBJ_NO_TOPICS,
+    });
+    expect(unreadable.categoryScores.topics).toBe(0);
+    expect(unreadable.aiReadinessScore).toBeLessThan(20);
+  });
+});
+
+describe("computeTopicCoverage — word-boundary, not naive substring (regression)", () => {
+  // Pages must clear the readable-text floor (120 chars) to be scanned.
+  const pad = " Please send me an email about the latest details and remember to maintain the templates carefully every single week.";
+
+  it("does not false-positive short topics inside larger words", () => {
+    const html = `<html><body><p>${pad}${pad}</p></body></html>`;
+    const cov = computeTopicCoverage([parseHtml(html, "https://x.example/", "https://x.example")], ["AI", "ML"]);
+    expect(cov["AI"]).toBe(false); // not matched inside "email"/"maintain"/"details"
+    expect(cov["ML"]).toBe(false); // not matched inside "templates"
+  });
+
+  it("matches a real whole-word topic", () => {
+    const html = `<html><body><h2>Our AI tools</h2><p>We build AI for teams.${pad}</p></body></html>`;
+    expect(computeTopicCoverage([parseHtml(html, "https://x.example/", "https://x.example")], ["AI"])["AI"]).toBe(true);
   });
 });

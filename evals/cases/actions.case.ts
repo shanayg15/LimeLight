@@ -77,3 +77,35 @@ describe("buildOpportunities — gap+finding → ranked Create/Improve/Earn/Enga
     }
   });
 });
+
+describe("buildOpportunities — review regressions", () => {
+  it("treats a topic as covered despite case/phrasing differences (model-generated topics)", () => {
+    const o = buildOpportunities({
+      coverageGaps: [
+        { promptId: "g1", promptText: "advanced math help", topic: "advanced mathematics", competingDomains: ["x.com"] },
+      ],
+      topDomains: [],
+      findings: [],
+      topicCoverage: { Mathematics: true }, // capitalized + shorter than the prompt's topic
+      hasSiteAudit: true,
+    });
+    // "advanced mathematics" contains the covered "mathematics" → Improve, not Create.
+    expect(o.find((x) => x.id === "improve-g1")?.kind).toBe("improve");
+    expect(o.some((x) => x.id === "create-g1")).toBe(false);
+  });
+
+  it("keeps distinct gaps that share prompt text (dedupe by id, not title)", () => {
+    const o = buildOpportunities({
+      coverageGaps: [
+        { promptId: "a", promptText: "same question", topic: "t", competingDomains: ["one.com"] },
+        { promptId: "b", promptText: "same question", topic: "t", competingDomains: ["two.com"] },
+      ],
+      topDomains: [],
+      findings: [],
+      topicCoverage: { t: false },
+      hasSiteAudit: true,
+    });
+    expect(o.filter((x) => x.kind === "create")).toHaveLength(2); // both survive
+    expect(o.flatMap((x) => x.evidence.sources ?? [])).toEqual(expect.arrayContaining(["one.com", "two.com"]));
+  });
+});
