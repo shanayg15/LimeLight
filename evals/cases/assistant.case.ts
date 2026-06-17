@@ -67,6 +67,11 @@ describe("dataCitations / hasAnyData", () => {
     expect(kinds).toContain("site_audit");
     expect(dataCitations(DATA).find((c) => c.kind === "run")?.href).toBe("/app/visibility");
   });
+  it("emits a 'page' citation when retrieved page excerpts are used (regression)", () => {
+    const withPages = { ...DATA, retrieved: [{ url: "https://ada.example/about", content: "Ada Lovelace bio" }] };
+    expect(dataCitations(withPages).some((c) => c.kind === "page")).toBe(true);
+    expect(dataCitations(DATA).some((c) => c.kind === "page")).toBe(false); // none when no excerpts
+  });
   it("hasAnyData is false for an empty subject (so the assistant declines, not invents)", () => {
     const empty: AssistantData = { subjectName: "x", latestRun: null, weakPrompts: [], topDomains: [], coverageGaps: [], siteFindings: [], draftTitles: [], opportunities: [], changed: null, retrieved: [] };
     expect(hasAnyData(empty)).toBe(false);

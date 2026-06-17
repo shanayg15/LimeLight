@@ -36,11 +36,12 @@ const REFERRAL_HOSTS: { match: (host: string) => boolean; engine: string }[] = [
   { match: (h) => h.endsWith("perplexity.ai"), engine: "perplexity" },
   { match: (h) => h === "gemini.google.com" || h === "bard.google.com", engine: "gemini" },
   { match: (h) => h === "claude.ai", engine: "claude" },
-  { match: (h) => h === "copilot.microsoft.com" || h === "www.bing.com" || h === "bing.com", engine: "copilot" },
+  // Only the Copilot host — bare bing.com is ordinary web search, not an AI answer.
+  { match: (h) => h === "copilot.microsoft.com", engine: "copilot" },
   { match: (h) => h === "you.com", engine: "you" },
 ];
 
-function hostOf(url: string | null | undefined): string | null {
+export function hostOf(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
     return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
@@ -69,12 +70,36 @@ export function classifyHit(input: { userAgent?: string | null; referrer?: strin
   return null;
 }
 
-/** Strip query + hash from a path; cap length. No PII. */
+/** Strip query + hash from a path; force a leading slash; strip control chars; cap length. No PII. */
 export function coarsePath(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const p = raw.split(/[?#]/)[0].trim();
+  // Drop query/hash, then strip control chars by code point (no control-char literal in source).
+  let p = Array.from(raw.split(/[?#]/)[0].trim())
+    .filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return c >= 32 && c !== 127;
+    })
+    .join("");
   if (!p) return "/";
-  return p.slice(0, 300);
+  // Coerce anything that isn't already a path into one (drop scheme/host if present).
+  if (!p.startsWith("/")) p = "/" + p.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "").replace(/^\/+/, "");
+  return p.slice(0, 300) || "/";
+}
+
+/**
+ * Reduce a user-agent to a COARSE, non-fingerprinting signal: the matched AI-bot
+ * token, else a browser family. Never persists the full UA (a quasi-PII vector).
+ */
+export function coarseUserAgent(ua: string | null | undefined): string | null {
+  if (!ua) return null;
+  const u = ua.toLowerCase();
+  for (const b of BOT_AGENTS) if (u.includes(b.token)) return b.token;
+  if (u.includes("edg/") || u.includes("edge/")) return "Edge";
+  if (u.includes("chrome/")) return "Chrome";
+  if (u.includes("firefox/")) return "Firefox";
+  if (u.includes("safari/")) return "Safari";
+  if (/bot|crawler|spider/.test(u)) return "bot";
+  return "other";
 }
 
 // ── ingest + aggregate (DB) ────────────────────────────────────────────────
@@ -96,7 +121,7 @@ export async function ingestAnalyticsEvent(payload: CollectPayload): Promise<Ana
     engine: cls.engine,
     path: coarsePath(payload.path),
     referrer: hostOf(payload.referrer),
-    userAgent: (payload.userAgent ?? "").slice(0, 200) || null,
+    userAgent: coarseUserAgent(payload.userAgent), // coarse family / bot token — never the full UA
   });
   return cls.type;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSnippet, classifyHit, coarsePath } from "@/lib/core/analytics";
+import { buildSnippet, classifyHit, coarsePath, coarseUserAgent } from "@/lib/core/analytics";
 
 describe("classifyHit — AI bot vs human referral, no false positives", () => {
   it("classifies known AI crawlers by user-agent", () => {
@@ -22,16 +22,34 @@ describe("classifyHit — AI bot vs human referral, no false positives", () => {
     expect(classifyHit({})).toBeNull();
   });
 
+  it("does NOT count ordinary Bing web search as an AI referral (regression)", () => {
+    expect(classifyHit({ referrer: "https://www.bing.com/search?q=x" })).toBeNull();
+    expect(classifyHit({ referrer: "https://bing.com/" })).toBeNull();
+    // Copilot's own host is still an AI referral.
+    expect(classifyHit({ referrer: "https://copilot.microsoft.com/" })).toEqual({ type: "referral", engine: "copilot" });
+  });
+
   it("bot (UA) takes precedence over referral", () => {
     expect(classifyHit({ userAgent: "GPTBot/1.0", referrer: "https://chatgpt.com/" })).toEqual({ type: "bot", engine: "openai" });
   });
 });
 
 describe("no PII — coarse signals only", () => {
-  it("coarsePath strips query + hash (no tokens/PII retained)", () => {
+  it("coarsePath strips query + hash + control chars + forces a leading slash (no tokens/PII)", () => {
     expect(coarsePath("/blog/post?utm=x&token=secret#section")).toBe("/blog/post");
     expect(coarsePath("/")).toBe("/");
     expect(coarsePath(null)).toBeNull();
+    expect(coarsePath("https://evil.com/x?t=1")).toBe("/x"); // host dropped, coerced to path
+    expect(coarsePath("/x" + String.fromCharCode(0) + "y")).toBe("/xy"); // control char stripped
+  });
+
+  it("coarseUserAgent reduces to a family/bot token — never the full UA (regression)", () => {
+    const fullChrome = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+    expect(coarseUserAgent(fullChrome)).toBe("Chrome");
+    expect(coarseUserAgent(fullChrome)).not.toContain("Macintosh"); // no fingerprintable detail retained
+    expect(coarseUserAgent("GPTBot/1.1")).toBe("gptbot");
+    expect(coarseUserAgent("Mozilla/5.0 Firefox/121")).toBe("Firefox");
+    expect(coarseUserAgent(null)).toBeNull();
   });
 });
 
