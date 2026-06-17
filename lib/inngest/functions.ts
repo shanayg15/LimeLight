@@ -10,6 +10,10 @@ import {
   sumActualCost,
 } from "@/lib/core/audit";
 import type { ScoreResponseInput } from "@/lib/core/score";
+import { fireDueSchedule, findDueSchedules } from "@/lib/core/tracking";
+import { runDigest } from "@/lib/core/digest";
+
+export const DIGEST_EVENT = "digest/run.requested";
 
 /**
  * Durable audit job. Each prompt is its own step, so partial progress survives a
@@ -65,6 +69,12 @@ export const auditRunFn = inngest.createFunction(
       }
 
       await step.run("score", () => finalizeRun(ctx, responses));
+
+      // Scheduled run → enqueue the digest (runDigest itself gates on opt-in).
+      if (ctx.run.scheduleId) {
+        const scheduleId = ctx.run.scheduleId;
+        await step.run("enqueue-digest", () => inngest.send({ name: DIGEST_EVENT, data: { scheduleId } }));
+      }
       return { ok: true, prompts: ctx.prompts.length, responses: responses.length };
     } catch (err) {
       await step.run("fail", async () => {
@@ -79,5 +89,45 @@ export const auditRunFn = inngest.createFunction(
       });
       return { ok: false, reason: "error" };
     }
+  },
+);
+
+/**
+ * Hourly tracking cron. Finds due+enabled schedules and fires each (cost-capped;
+ * over-cap → skip + record). Advancing nextRunAt per-schedule inside fireDueSchedule
+ * keeps it from double-firing across ticks. Each schedule is its own durable step.
+ */
+export const trackingCronFn = inngest.createFunction(
+  { id: "tracking-cron", triggers: { cron: "0 * * * *" } },
+  async ({ step }) => {
+    const now = new Date();
+    const due = await step.run("find-due", async () => (await findDueSchedules(now)).map((s) => s.id));
+    let fired = 0;
+    for (const scheduleId of due) {
+      const result = await step.run(`fire-${scheduleId}`, async () => {
+        const { db } = await import("@/lib/db/client");
+        const { schedules } = await import("@/lib/db/schema");
+        const { eq } = await import("drizzle-orm");
+        const [s] = await db.select().from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
+        // Re-check due at execution time (idempotent if another tick already advanced it).
+        if (!s || !s.enabled || !s.nextRunAt || s.nextRunAt.getTime() > now.getTime()) return { fired: false, reason: "not due" };
+        return fireDueSchedule(s, now);
+      });
+      if (result.fired) fired += 1;
+    }
+    return { due: due.length, fired };
+  },
+);
+
+/** Build + (opt-in-gated) send a weekly digest for a schedule. */
+export const digestFn = inngest.createFunction(
+  { id: "digest-run", retries: 1, triggers: { event: DIGEST_EVENT } },
+  async ({ event, step }) => {
+    const scheduleId = (event.data as { scheduleId: string }).scheduleId;
+    const baseUrl = process.env.APP_URL ?? "http://localhost:3012";
+    return step.run("digest", async () => {
+      const res = await runDigest(scheduleId, baseUrl);
+      return { sent: res?.sent ?? false, reason: res?.reason };
+    });
   },
 );
