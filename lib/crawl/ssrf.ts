@@ -80,9 +80,20 @@ export function validatePublicUrl(raw: string): URL {
   if (!raw || !raw.trim()) throw new UrlValidationError("Empty URL.");
   const candidate = raw.trim();
 
+  // Decide whether to parse as-is or assume https. A scheme present (file:, ftp:,
+  // data:, anything://) is parsed as-is so the protocol guard below rejects it;
+  // a scheme-less `host[:port][/path]` gets https:// prepended. Disambiguate
+  // "scheme:..." from "host:port" by what follows the colon.
   let url: URL;
   try {
-    url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
+    const m = candidate.match(/^([a-z][a-z0-9+.-]*):(.*)$/i);
+    if (!m) {
+      url = new URL(`https://${candidate}`);
+    } else if (/^\d+(\/|\?|#|$)/.test(m[2])) {
+      url = new URL(`https://${candidate}`); // colon introduced a port, not a scheme
+    } else {
+      url = new URL(candidate); // real scheme (http(s):// → kept; others → rejected below)
+    }
   } catch {
     throw new UrlValidationError("That doesn't look like a valid URL.");
   }

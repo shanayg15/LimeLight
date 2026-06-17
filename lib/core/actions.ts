@@ -171,7 +171,7 @@ export async function findContentGaps(
   const { auditRuns, siteAudits, subjects } = await import("@/lib/db/schema");
   const { analyzeSources } = await import("@/lib/core/sources");
 
-  let runId = auditRunId;
+  const runId = auditRunId;
   let subjectId: string | null = null;
 
   if (runId) {

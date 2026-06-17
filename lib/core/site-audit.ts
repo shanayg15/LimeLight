@@ -46,8 +46,11 @@ function hasType(pages: PageData[], re: RegExp): boolean {
   return pages.some((p) => p.jsonLd.some((b) => b.valid && b.types.some((t) => re.test(t))));
 }
 
+/** Floor for "this page has real server-rendered text we could read". */
+const READABLE_TEXT_FLOOR = 120;
+
 function pagesWithText(pages: PageData[]): PageData[] {
-  return pages.filter((p) => !p.looksClientRendered && p.textLength >= 400);
+  return pages.filter((p) => !p.looksClientRendered && p.textLength >= READABLE_TEXT_FLOOR);
 }
 
 /** Coarse topic coverage: does any readable page mention the topic in text/headings? */
@@ -70,7 +73,12 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
   const readablePages = pagesWithText(pages);
   const readable = readablePages.length > 0;
 
-  // Honest gate: if nothing was readable, report it loudly and score low.
+  // Honest gate. Distinguish three failure modes so we never mislabel a thin but
+  // server-rendered page as "JavaScript-only":
+  //  - no pages fetched at all,
+  //  - pages are empty JS shells (tiny text + script bundles) → client-rendered,
+  //  - pages have some text but it's all too thin to read → thin content.
+  const allClientRendered = pages.length > 0 && pages.every((p) => p.looksClientRendered);
   if (pages.length === 0) {
     findings.push({
       id: "no-pages",
@@ -79,14 +87,24 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
       message: "We couldn't fetch any pages from your site.",
       evidence: "No HTML responded — check the site URL, that the site is up, and that it isn't blocking crawlers.",
     });
-  } else if (!readable) {
+  } else if (allClientRendered) {
     findings.push({
       id: "client-rendered",
       severity: "high",
       area: "fetchability",
       message: "Your site appears client-rendered (JavaScript-only) — AI crawlers may see an empty page.",
       evidence:
-        "We fetched pages but found almost no server-rendered text. AI assistants that don't run JS will read nothing. Server-render or pre-render your key pages.",
+        "We fetched pages but found almost no server-rendered text alongside script bundles. AI assistants that don't run JS will read nothing. Server-render or pre-render your key pages.",
+      pages: pages.slice(0, 5).map((p) => p.url),
+    });
+  } else if (!readable) {
+    findings.push({
+      id: "thin-content",
+      severity: "med",
+      area: "structure",
+      message: "Your pages have very little readable text.",
+      evidence:
+        "The pages we read are thin. Add substantive, answer-first content so AI has something specific to quote and cite.",
       pages: pages.slice(0, 5).map((p) => p.url),
     });
   }
