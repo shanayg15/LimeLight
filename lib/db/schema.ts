@@ -232,3 +232,38 @@ export const userSettings = pgTable("user_settings", {
 
 export type ProviderKeyRow = typeof providerKeys.$inferSelect;
 export type UserSettings = typeof userSettings.$inferSelect;
+
+// ── M5: site crawl audit + recommended actions ───────────────────────────
+
+export type SiteAuditSeverity = "high" | "med" | "low";
+export type SiteAuditArea = "schema" | "structure" | "fetchability" | "entity" | "topics";
+
+export type SiteAuditFinding = {
+  id: string;
+  severity: SiteAuditSeverity;
+  area: SiteAuditArea;
+  message: string;
+  /** A concrete, fixable detail — never a vague "improve your SEO". */
+  evidence?: string;
+  /** Which crawled URLs the finding applies to. */
+  pages?: string[];
+};
+
+export const siteAudits = pgTable("site_audits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  subjectId: uuid("subject_id")
+    .notNull()
+    .references(() => subjects.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  aiReadinessScore: integer("ai_readiness_score").notNull().default(0),
+  findings: jsonb("findings").notNull().$type<SiteAuditFinding[]>().default(sql`'[]'::jsonb`),
+  pagesCrawled: integer("pages_crawled").notNull().default(0),
+  /** Honest signal: false if the site is JS-only/empty and we couldn't read content. */
+  readable: boolean("readable").notNull().default(true),
+  /** Which crawled topics the site actually covers (drives Create-vs-Improve). */
+  topicCoverage: jsonb("topic_coverage").notNull().$type<Record<string, boolean>>().default(sql`'{}'::jsonb`),
+  notes: text("notes"),
+  crawledAt: timestamp("crawled_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+export type SiteAudit = typeof siteAudits.$inferSelect;
