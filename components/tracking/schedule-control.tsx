@@ -27,12 +27,14 @@ export function ScheduleControl({
   availableEngines,
   defaultEngines,
   defaultSamples,
+  maxSpendPerRunUsd,
   hasResendEnv,
 }: {
   schedule: Schedule | null;
   availableEngines: EngineId[];
   defaultEngines: EngineId[];
   defaultSamples: number;
+  maxSpendPerRunUsd: number | null;
   hasResendEnv: boolean;
 }) {
   const router = useRouter();
@@ -126,7 +128,7 @@ export function ScheduleControl({
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={email} onChange={(e) => setEmail(e.target.checked)} className="size-4" />
         <Mail className="size-4 text-muted-foreground" />
-        <span>Email me a weekly digest</span>
+        <span>Email me a {cadence} digest</span>
         {!hasResendEnv && <span className="text-xs text-muted-foreground">(needs a Resend key configured to actually send)</span>}
       </label>
 
@@ -153,7 +155,16 @@ export function ScheduleControl({
             </DialogHeader>
             <div className="rounded-md border border-border px-3 py-2 text-sm">
               Estimated per run: <span className="font-medium">{estimate == null ? "…" : `~$${estimate.toFixed(2)}`}</span>
+              {maxSpendPerRunUsd != null && (
+                <span className="text-muted-foreground"> · your per-run cap: ${maxSpendPerRunUsd.toFixed(2)}</span>
+              )}
             </div>
+            {estimate != null && maxSpendPerRunUsd != null && estimate > maxSpendPerRunUsd && (
+              <p className="rounded-md border border-negative/30 bg-negative/10 px-3 py-2 text-xs text-negative">
+                This estimate exceeds your per-run cap — every scheduled run would be skipped. Raise the cap in
+                Settings or reduce engines/samples.
+              </p>
+            )}
             <DialogFooter>
               <DialogClose className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">Cancel</DialogClose>
               <DialogClose className={cn(buttonVariants())} onClick={() => save(true)}>

@@ -19,6 +19,8 @@ export type DigestSummary = {
   lost: string[];
   newOpportunities: string[];
   headline: string;
+  /** False when the two compared runs used different engines/samples — deltas aren't real movement. */
+  comparable: boolean;
 };
 
 /** The opt-in gate. Pure → the digest-gating eval asserts this directly. */
@@ -39,9 +41,13 @@ export function buildDigestSummary(input: {
   const { subjectName, latestScores, diff } = input;
   const visibility = latestScores?.visibilityScore ?? null;
   const vDelta = diff?.visibilityDelta ?? null;
+  // If the compared runs used different engines/samples, the deltas aren't real
+  // movement — say so (same integrity rule the in-app diff banner enforces).
+  const comparable = !diff?.configMismatch;
 
   let headline: string;
-  if (vDelta == null) headline = `Your first tracked snapshot for ${subjectName}.`;
+  if (!comparable) headline = `Your tracking config changed since last run — metrics aren't directly comparable. Visibility is now ${pct(visibility)}.`;
+  else if (vDelta == null) headline = `Your first tracked snapshot for ${subjectName}.`;
   else if (vDelta > 0.001) headline = `Visibility up ${Math.round(vDelta * 100)} pts to ${pct(visibility)}.`;
   else if (vDelta < -0.001) headline = `Visibility down ${Math.round(Math.abs(vDelta) * 100)} pts to ${pct(visibility)}.`;
   else headline = `Visibility held steady at ${pct(visibility)}.`;
@@ -49,12 +55,14 @@ export function buildDigestSummary(input: {
   return {
     subjectName,
     visibility,
-    visibilityDelta: vDelta,
-    shareOfVoiceDelta: diff?.shareOfVoiceDelta ?? null,
-    gained: (diff?.gainedMentions ?? []).map((m) => m.text),
-    lost: (diff?.lostMentions ?? []).map((m) => m.text),
+    // Suppress deltas/gained/lost when not comparable — never present a config-driven swing as real.
+    visibilityDelta: comparable ? vDelta : null,
+    shareOfVoiceDelta: comparable ? (diff?.shareOfVoiceDelta ?? null) : null,
+    gained: comparable ? (diff?.gainedMentions ?? []).map((m) => m.text) : [],
+    lost: comparable ? (diff?.lostMentions ?? []).map((m) => m.text) : [],
     newOpportunities: input.opportunities.slice(0, 5).map((o) => o.title),
     headline,
+    comparable,
   };
 }
 
@@ -64,9 +72,13 @@ function esc(s: string): string {
 
 export function renderDigestHtml(s: DigestSummary, unsubscribeUrl: string): string {
   const list = (items: string[]) => (items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "<p>None.</p>");
+  const caveat = s.comparable
+    ? ""
+    : `<p style="font-size:13px;background:#fff4e0;border:1px solid #f0c987;padding:8px 10px;border-radius:6px">Heads up: your engines/samples changed since the previous run, so this run isn't directly comparable — movement figures are omitted.</p>`;
   return `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
 <h1 style="font-size:18px">Limelight — ${esc(s.subjectName)}</h1>
 <p style="font-size:16px;font-weight:600">${esc(s.headline)}</p>
+${caveat}
 <p>Visibility: <strong>${pct(s.visibility)}</strong>${s.visibilityDelta != null ? ` (${s.visibilityDelta >= 0 ? "+" : ""}${Math.round(s.visibilityDelta * 100)} pts)` : ""}</p>
 <h2 style="font-size:15px">Newly mentioned</h2>${list(s.gained)}
 <h2 style="font-size:15px">Lost mentions</h2>${list(s.lost)}
@@ -80,7 +92,13 @@ export function renderDigestHtml(s: DigestSummary, unsubscribeUrl: string): stri
 // ── Signed unsubscribe token (one-click disable, no login required) ──────────
 
 function secret(): string {
-  return process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "limelight-dev-secret";
+  const s = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
+  if (s) return s;
+  // Fail closed in production — never sign/verify unsubscribe tokens with a public dev secret.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("AUTH_SECRET must be set in production (digest unsubscribe tokens).");
+  }
+  return "limelight-dev-secret";
 }
 
 export function unsubscribeToken(scheduleId: string): string {

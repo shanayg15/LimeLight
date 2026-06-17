@@ -94,8 +94,11 @@ export function TrackingView({ state }: { state: TrackingState }) {
 
           {diff.configMismatch && (
             <p className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-xs">
-              These runs used different engines ({diff.enginesA.join(", ")} → {diff.enginesB.join(", ")}) — some changes
-              may reflect the config, not real movement.
+              These runs used a different config
+              {diff.enginesA.join(",") !== diff.enginesB.join(",")
+                ? ` (engines: ${diff.enginesA.join(", ")} → ${diff.enginesB.join(", ")})`
+                : ` (samples: ${diff.samplesA} → ${diff.samplesB})`}
+              — some changes may reflect the config, not real movement.
             </p>
           )}
 
@@ -157,6 +160,7 @@ export function TrackingView({ state }: { state: TrackingState }) {
         availableEngines={state.availableEngines}
         defaultEngines={state.defaultEngines}
         defaultSamples={state.defaultSamples}
+        maxSpendPerRunUsd={state.maxSpendPerRunUsd}
         hasResendEnv={state.hasResendEnv}
       />
     </div>

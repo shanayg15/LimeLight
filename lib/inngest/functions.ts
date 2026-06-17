@@ -98,7 +98,8 @@ export const auditRunFn = inngest.createFunction(
  * keeps it from double-firing across ticks. Each schedule is its own durable step.
  */
 export const trackingCronFn = inngest.createFunction(
-  { id: "tracking-cron", triggers: { cron: "0 * * * *" } },
+  // concurrency:1 prevents an overlapping tick; fireDueSchedule also claims atomically.
+  { id: "tracking-cron", concurrency: { limit: 1 }, triggers: { cron: "0 * * * *" } },
   async ({ step }) => {
     const now = new Date();
     const due = await step.run("find-due", async () => (await findDueSchedules(now)).map((s) => s.id));

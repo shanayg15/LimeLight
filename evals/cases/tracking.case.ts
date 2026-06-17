@@ -74,6 +74,7 @@ describe("diffRuns — what changed between two runs", () => {
     runId: "a",
     createdAt: new Date("2026-06-01T00:00:00Z"),
     engines: ["perplexity"],
+    samples: 3,
     scores: scores({ visibilityScore: 0.5, shareOfVoice: 0.3 }),
     prompts: [
       { promptId: "p1", text: "who is X", mentioned: true, position: 3 },
@@ -86,6 +87,7 @@ describe("diffRuns — what changed between two runs", () => {
     runId: "b",
     createdAt: new Date("2026-06-08T00:00:00Z"),
     engines: ["perplexity", "openai"],
+    samples: 3,
     scores: scores({ visibilityScore: 0.7, shareOfVoice: 0.45 }),
     prompts: [
       { promptId: "p1", text: "who is X", mentioned: true, position: 1 }, // improved 3→1
@@ -112,6 +114,14 @@ describe("diffRuns — what changed between two runs", () => {
     expect(Math.round((d.visibilityDelta ?? 0) * 100)).toBe(20);
     expect(d.configMismatch).toBe(true); // perplexity vs perplexity+openai
   });
+
+  it("flags a samples-only difference as a config mismatch (regression)", () => {
+    const sameEnginesDiffSamples = diffRuns(
+      { ...a, engines: ["perplexity"], samples: 1 },
+      { ...b, engines: ["perplexity"], samples: 5 },
+    );
+    expect(sameEnginesDiffSamples.configMismatch).toBe(true);
+  });
 });
 
 describe("capDecision — scheduled runs honor cost caps", () => {
@@ -134,12 +144,26 @@ describe("digest gating — never send without opt-in", () => {
     const s = buildDigestSummary({
       subjectName: "Ada",
       latestScores: scores({ visibilityScore: 0.7 }),
-      diff: { visibilityDelta: 0.2, shareOfVoiceDelta: 0.1, gainedMentions: [{ promptId: "p", text: "best X" }], lostMentions: [], positionImproved: [], positionRegressed: [], newDomains: [], lostDomains: [], configMismatch: false, enginesA: [], enginesB: [] },
+      diff: { visibilityDelta: 0.2, shareOfVoiceDelta: 0.1, gainedMentions: [{ promptId: "p", text: "best X" }], lostMentions: [], positionImproved: [], positionRegressed: [], newDomains: [], lostDomains: [], configMismatch: false, enginesA: [], enginesB: [], samplesA: 3, samplesB: 3 },
       opportunities: [{ title: "Publish X" }],
     });
     expect(s.headline).toMatch(/up 20 pts/);
+    expect(s.comparable).toBe(true);
     expect(s.gained).toContain("best X");
     expect(s.newOpportunities).toContain("Publish X");
+  });
+
+  it("suppresses deltas + caveats the headline when the compared runs aren't config-comparable (regression)", () => {
+    const s = buildDigestSummary({
+      subjectName: "Ada",
+      latestScores: scores({ visibilityScore: 0.7 }),
+      diff: { visibilityDelta: -0.3, shareOfVoiceDelta: -0.2, gainedMentions: [], lostMentions: [{ promptId: "p", text: "lost one" }], positionImproved: [], positionRegressed: [], newDomains: [], lostDomains: [], configMismatch: true, enginesA: ["perplexity"], enginesB: ["perplexity", "openai"], samplesA: 3, samplesB: 3 },
+      opportunities: [],
+    });
+    expect(s.comparable).toBe(false);
+    expect(s.headline).toMatch(/config changed/i);
+    expect(s.visibilityDelta).toBeNull(); // never present a config-driven swing as real
+    expect(s.lost).toEqual([]);
   });
   it("unsubscribe token round-trips and rejects tampering", () => {
     const tok = unsubscribeToken("sched-1");

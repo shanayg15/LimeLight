@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, ne } from "drizzle-orm";
 import type { AuditScores, Cadence, EngineId, Schedule } from "@/lib/db/schema";
 
 /**
@@ -73,6 +73,7 @@ export type RunSnapshot = {
   runId: string;
   createdAt: Date;
   engines: EngineId[];
+  samples: number;
   scores: AuditScores | null;
   prompts: PromptState[];
   domains: string[];
@@ -82,10 +83,12 @@ export type MentionChange = { promptId: string; text: string };
 export type PositionMove = { promptId: string; text: string; from: number | null; to: number | null };
 
 export type RunDiff = {
-  /** True if the two runs used different engine sets — deltas aren't strictly like-for-like. */
+  /** True if the two runs used a different engine set OR sample count — deltas aren't strictly like-for-like. */
   configMismatch: boolean;
   enginesA: EngineId[];
   enginesB: EngineId[];
+  samplesA: number;
+  samplesB: number;
   gainedMentions: MentionChange[]; // mentioned in B, not in A
   lostMentions: MentionChange[]; // mentioned in A, not in B
   positionImproved: PositionMove[]; // mentioned in both, rank got better (lower)
@@ -130,12 +133,16 @@ export function diffRuns(a: RunSnapshot, b: RunSnapshot): RunDiff {
 
   const enginesA = [...a.engines].sort();
   const enginesB = [...b.engines].sort();
-  const configMismatch = enginesA.join(",") !== enginesB.join(",");
+  // Visibility/SoV are "mentioned in ≥1 sample" aggregates, so a different sample
+  // count is also a config-driven shift — flag it, not just engine differences.
+  const configMismatch = enginesA.join(",") !== enginesB.join(",") || a.samples !== b.samples;
 
   return {
     configMismatch,
     enginesA: a.engines,
     enginesB: b.engines,
+    samplesA: a.samples,
+    samplesB: b.samples,
     gainedMentions,
     lostMentions,
     positionImproved,
@@ -196,12 +203,16 @@ export async function getSchedule(subjectId: string): Promise<Schedule | null> {
   return row ?? null;
 }
 
-/** Build the per-prompt + domain snapshot a diff needs for one run. */
-export async function buildRunSnapshot(runId: string): Promise<RunSnapshot | null> {
+/**
+ * Build the per-prompt + domain snapshot a diff needs for one run. Pass
+ * `subjectId` to scope the lookup — diffs must never read another user's run.
+ */
+export async function buildRunSnapshot(runId: string, opts: { subjectId?: string } = {}): Promise<RunSnapshot | null> {
   const db = await dbi();
   const { auditRuns, modelResponses, mentions, citations, prompts } = await import("@/lib/db/schema");
   const [run] = await db.select().from(auditRuns).where(eq(auditRuns.id, runId)).limit(1);
   if (!run) return null;
+  if (opts.subjectId && run.subjectId !== opts.subjectId) return null; // ownership scope
 
   const responses = await db
     .select({ id: modelResponses.id, promptId: modelResponses.promptId, searchEnabled: modelResponses.searchEnabled })
@@ -247,6 +258,7 @@ export async function buildRunSnapshot(runId: string): Promise<RunSnapshot | nul
     runId,
     createdAt: run.createdAt,
     engines: run.config.engines,
+    samples: run.config.samples,
     scores: run.scores ?? null,
     prompts: [...byPrompt.values()],
     domains: [...domains],
@@ -291,9 +303,12 @@ export async function getDiffData(subjectId: string, runAId?: string, runBId?: s
     bId = recent[0].id; // newest
     aId = recent[1].id; // previous
   }
-  const [a, b] = await Promise.all([buildRunSnapshot(aId), buildRunSnapshot(bId)]);
+  // Scope both snapshots to this subject (no cross-tenant reads) ...
+  const [a, b] = await Promise.all([buildRunSnapshot(aId, { subjectId }), buildRunSnapshot(bId, { subjectId })]);
   if (!a || !b) return null;
-  return diffRuns(a, b);
+  // ... and always diff older → newer regardless of caller-supplied order.
+  const [older, newer] = a.createdAt.getTime() <= b.createdAt.getTime() ? [a, b] : [b, a];
+  return diffRuns(older, newer);
 }
 
 // ── Cron helpers ──────────────────────────────────────────────────────────
@@ -315,22 +330,53 @@ export function capDecision(
 
 async function monthlySpendForUser(userId: string): Promise<number> {
   const db = await dbi();
-  const { gte } = await import("drizzle-orm");
-  const { modelResponses, auditRuns, subjects } = await import("@/lib/db/schema");
+  const { auditRuns, subjects } = await import("@/lib/db/schema");
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // Count realized cost for completed runs AND the ESTIMATE for queued/running ones,
+  // so runs enqueued earlier this tick (or still in flight) count toward the cap —
+  // otherwise several due schedules in one tick each read a stale total and overspend.
   const rows = await db
-    .select({ c: modelResponses.costUsd })
-    .from(modelResponses)
-    .innerJoin(auditRuns, eq(modelResponses.auditRunId, auditRuns.id))
+    .select({ actual: auditRuns.costActualUsd, est: auditRuns.costEstimateUsd })
+    .from(auditRuns)
     .innerJoin(subjects, eq(auditRuns.subjectId, subjects.id))
-    .where(and(eq(subjects.userId, userId), gte(auditRuns.createdAt, monthStart)));
-  return rows.reduce((s, r) => s + (r.c ?? 0), 0);
+    .where(and(eq(subjects.userId, userId), gte(auditRuns.createdAt, monthStart), ne(auditRuns.status, "failed")));
+  return rows.reduce((s, r) => s + (r.actual ?? r.est ?? 0), 0);
 }
 
 /**
- * Fire one due schedule: enforce cost caps (skip + record reason if over),
- * else create the audit run (tagged scheduleId), then advance the schedule.
+ * Atomically claim a due schedule for THIS tick: advance nextRunAt only if it's
+ * still due (enabled && nextRunAt <= now). Anchored to the prior nextRunAt so the
+ * cadence doesn't drift to the hourly tick boundary. Returns false if another
+ * concurrent tick (or a step retry) already advanced it — the double-fire guard.
+ */
+export async function claimDueSchedule(schedule: Schedule, now: Date): Promise<boolean> {
+  const db = await dbi();
+  const { schedules } = await import("@/lib/db/schema");
+  const next = nextRunFrom(schedule.cadence, schedule.nextRunAt ?? now);
+  const claimed = await db
+    .update(schedules)
+    .set({ nextRunAt: next, updatedAt: now })
+    .where(and(eq(schedules.id, schedule.id), eq(schedules.enabled, true), lte(schedules.nextRunAt, now)))
+    .returning({ id: schedules.id });
+  return claimed.length === 1;
+}
+
+async function recordScheduleResult(scheduleId: string, result: { ranAt: Date } | { skipReason: string; at: Date }): Promise<void> {
+  const db = await dbi();
+  const { schedules } = await import("@/lib/db/schema");
+  if ("ranAt" in result) {
+    await db.update(schedules).set({ lastRunAt: result.ranAt, lastSkipReason: null, lastSkipAt: null, updatedAt: result.ranAt }).where(eq(schedules.id, scheduleId));
+  } else {
+    await db.update(schedules).set({ lastSkipReason: result.skipReason, lastSkipAt: result.at, updatedAt: result.at }).where(eq(schedules.id, scheduleId));
+  }
+}
+
+/**
+ * Fire one due schedule. ATOMICALLY CLAIMS it first (advances nextRunAt only if
+ * still due) so two overlapping cron ticks — or a step retry after a mid-run
+ * failure — can't double-fire / double-spend. After claiming: enforce cost caps
+ * (skip + record reason if over), else create the audit run tagged with scheduleId.
  */
 export async function fireDueSchedule(schedule: Schedule, now: Date = new Date()): Promise<{ fired: boolean; reason?: string }> {
   const db = await dbi();
@@ -338,6 +384,10 @@ export async function fireDueSchedule(schedule: Schedule, now: Date = new Date()
   const { getUserSettings } = await import("@/lib/core/keys");
   const { estimateAuditCost } = await import("@/lib/engines/pricing");
   const { runAudit } = await import("@/lib/core/audit");
+
+  // Claim before doing any work — only one concurrent caller wins.
+  const won = await claimDueSchedule(schedule, now);
+  if (!won) return { fired: false, reason: "already claimed" };
 
   const [subject] = await db.select().from(subjects).where(eq(subjects.id, schedule.subjectId)).limit(1);
   if (!subject) return { fired: false, reason: "subject missing" };
@@ -347,7 +397,7 @@ export async function fireDueSchedule(schedule: Schedule, now: Date = new Date()
     .from(prompts)
     .where(and(eq(prompts.subjectId, schedule.subjectId), eq(prompts.enabled, true)));
   if (enabled.length === 0) {
-    await advanceSchedule(schedule.id, schedule.cadence, { skipReason: "no enabled prompts", at: now });
+    await recordScheduleResult(schedule.id, { skipReason: "no enabled prompts", at: now });
     return { fired: false, reason: "no enabled prompts" };
   }
 
@@ -356,7 +406,7 @@ export async function fireDueSchedule(schedule: Schedule, now: Date = new Date()
   const spent = await monthlySpendForUser(subject.userId);
   const decision = capDecision(estimate, spent, { perRun: settings.maxSpendPerRunUsd, monthly: settings.maxSpendMonthlyUsd });
   if (!decision.allowed) {
-    await advanceSchedule(schedule.id, schedule.cadence, { skipReason: decision.reason!, at: now });
+    await recordScheduleResult(schedule.id, { skipReason: decision.reason!, at: now });
     return { fired: false, reason: decision.reason };
   }
 
@@ -365,37 +415,13 @@ export async function fireDueSchedule(schedule: Schedule, now: Date = new Date()
     { engines: schedule.engines, samples: schedule.samples, temperature: settings.temperature, maxSpendUsd: settings.maxSpendPerRunUsd },
     { scheduleId: schedule.id },
   );
-  await advanceSchedule(schedule.id, schedule.cadence, { ranAt: now });
+  await recordScheduleResult(schedule.id, { ranAt: now });
   return { fired: true };
 }
-
 
 export async function findDueSchedules(now: Date): Promise<Schedule[]> {
   const db = await dbi();
   const { schedules } = await import("@/lib/db/schema");
   const all = await db.select().from(schedules).where(eq(schedules.enabled, true));
   return selectDueSchedules(all, now);
-}
-
-/** Advance a schedule after a run fired (or was skipped). Idempotent per cadence. */
-export async function advanceSchedule(
-  scheduleId: string,
-  cadence: Cadence,
-  result: { ranAt: Date } | { skipReason: string; at: Date },
-): Promise<void> {
-  const db = await dbi();
-  const { schedules } = await import("@/lib/db/schema");
-  const base = "ranAt" in result ? result.ranAt : result.at;
-  const next = nextRunFrom(cadence, base);
-  if ("ranAt" in result) {
-    await db
-      .update(schedules)
-      .set({ nextRunAt: next, lastRunAt: result.ranAt, lastSkipReason: null, lastSkipAt: null, updatedAt: result.ranAt })
-      .where(eq(schedules.id, scheduleId));
-  } else {
-    await db
-      .update(schedules)
-      .set({ nextRunAt: next, lastSkipReason: result.skipReason, lastSkipAt: result.at, updatedAt: result.at })
-      .where(eq(schedules.id, scheduleId));
-  }
 }

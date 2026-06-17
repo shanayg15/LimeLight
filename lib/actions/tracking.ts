@@ -25,6 +25,8 @@ export type TrackingState = {
   availableEngines: EngineId[];
   defaultEngines: EngineId[];
   defaultSamples: number;
+  maxSpendPerRunUsd: number | null;
+  maxSpendMonthlyUsd: number | null;
   hasResendEnv: boolean;
 };
 
@@ -48,6 +50,8 @@ export async function getTrackingState(): Promise<TrackingState | null> {
     availableEngines: available,
     defaultEngines: settings.enabledEngines,
     defaultSamples: settings.samples,
+    maxSpendPerRunUsd: settings.maxSpendPerRunUsd,
+    maxSpendMonthlyUsd: settings.maxSpendMonthlyUsd,
     hasResendEnv: Boolean(process.env.RESEND_API_KEY?.trim()),
   };
 }

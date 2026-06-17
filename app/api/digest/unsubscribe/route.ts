@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     );
 
   if (!scheduleId || !token || !verifyUnsubscribeToken(scheduleId, token)) {
-    return page("This unsubscribe link is invalid or expired.", false);
+    return page("This unsubscribe link is invalid.", false);
   }
   const [row] = await db.select().from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
   if (!row) return page("This schedule no longer exists.", false);
