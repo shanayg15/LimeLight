@@ -56,6 +56,25 @@ function isUgc(domain: string): boolean {
 const impactRank: Record<Impact, number> = { high: 3, med: 2, low: 1 };
 const effortRank: Record<Effort, number> = { low: 3, med: 2, high: 1 };
 
+/**
+ * Is a prompt's topic covered by the site? topicCoverage is keyed by exact
+ * subject-topic strings, but a model-generated prompt's topic may differ in
+ * case/phrasing (e.g. "AEO" vs "answer engine optimization"). Match leniently
+ * (exact → case-insensitive → substring either way) before defaulting to Create.
+ */
+function isTopicCovered(topic: string | undefined, coverage: Record<string, boolean>): boolean {
+  if (!topic) return false;
+  if (coverage[topic] === true) return true;
+  const t = topic.trim().toLowerCase();
+  if (!t) return false;
+  for (const [key, covered] of Object.entries(coverage)) {
+    if (!covered) continue;
+    const k = key.trim().toLowerCase();
+    if (k === t || k.includes(t) || t.includes(k)) return true;
+  }
+  return false;
+}
+
 export function buildOpportunities(input: OpportunityInput): Opportunity[] {
   const out: Opportunity[] = [];
   const { coverageGaps, topDomains, findings, topicCoverage } = input;
@@ -64,7 +83,7 @@ export function buildOpportunities(input: OpportunityInput): Opportunity[] {
   for (const gap of coverageGaps) {
     const topic = gap.topic ?? undefined;
     // If the site covers the topic, you have a page → IMPROVE it; else CREATE.
-    const covered = topic ? topicCoverage[topic] === true : false;
+    const covered = isTopicCovered(topic, topicCoverage);
     const competing = gap.competingDomains.length;
     const impact: Impact = competing >= 3 ? "high" : competing >= 1 ? "med" : "low";
 
@@ -137,12 +156,12 @@ export function buildOpportunities(input: OpportunityInput): Opportunity[] {
     }
   }
 
-  // Dedupe by title, then rank by impact, then by (lower) effort.
+  // Dedupe by stable id (unique per source) — NOT by title, which can collide
+  // across distinct prompts/findings and silently drop their evidence.
   const seen = new Set<string>();
   const deduped = out.filter((o) => {
-    const k = o.title.toLowerCase();
-    if (seen.has(k)) return false;
-    seen.add(k);
+    if (seen.has(o.id)) return false;
+    seen.add(o.id);
     return true;
   });
   deduped.sort(

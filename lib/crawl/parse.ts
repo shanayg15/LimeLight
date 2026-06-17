@@ -11,8 +11,12 @@ export type JsonLdBlock = {
   parsed: unknown | null;
   /** Extracted @type values (flattened through @graph). */
   types: string[];
-  /** Parses as JSON and carries at least one @type — a coarse pre-M6 validity check. */
-  valid: boolean;
+  /**
+   * Parses as JSON AND carries at least one @type. This is NOT full schema
+   * validity (required-property checking arrives with the M6 schema validator)
+   * — named to avoid callers reading it as "valid".
+   */
+  parsedWithType: boolean;
 };
 
 export type PageData = {
@@ -37,6 +41,8 @@ export type PageData = {
 };
 
 const BODY_TEXT_CAP = 20_000;
+/** Below this many chars of server-rendered text + ≥1 script → a JS shell. */
+const CLIENT_SHELL_TEXT_MAX = 64;
 
 function flattenTypes(node: unknown, out: string[]): void {
   if (!node || typeof node !== "object") return;
@@ -88,7 +94,7 @@ export function parseHtml(html: string, pageUrl: string, origin: string): PageDa
     }
     const types: string[] = [];
     if (parsed) flattenTypes(parsed, types);
-    jsonLd.push({ raw: raw.slice(0, 4000), parsed, types, valid: parsed != null && types.length > 0 });
+    jsonLd.push({ raw: raw.slice(0, 4000), parsed, types, parsedWithType: parsed != null && types.length > 0 });
   });
 
   // FAQ heuristic: a JSON-LD FAQPage, an explicit FAQ heading, or ≥2 question headings.
@@ -110,7 +116,10 @@ export function parseHtml(html: string, pageUrl: string, origin: string): PageDa
       .find((t) => t.length >= 40) ?? null;
 
   const scriptCount = $("script").length;
-  const looksClientRendered = textLength < 400 && scriptCount >= 1;
+  // A near-empty body alongside script tags → a JS shell cheerio can't read.
+  // Kept BELOW site-audit's readable-text floor (120) so a thin-but-server-rendered
+  // page (120–399 chars) is never misclassified as "JavaScript-only".
+  const looksClientRendered = textLength < CLIENT_SHELL_TEXT_MAX && scriptCount >= 1;
 
   // Same-origin internal links (absolute, deduped, no fragments/mailto/tel).
   const seen = new Set<string>();

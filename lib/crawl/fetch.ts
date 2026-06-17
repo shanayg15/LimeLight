@@ -24,7 +24,7 @@ const DEFAULT_MAX_BYTES = 2_000_000; // 2 MB per page
  */
 export async function politeFetch(
   rawUrl: string,
-  opts: { timeoutMs?: number; maxBytes?: number; maxRedirects?: number } = {},
+  opts: { timeoutMs?: number; maxBytes?: number; maxRedirects?: number; sameOriginAs?: string } = {},
 ): Promise<FetchResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -66,6 +66,11 @@ export async function politeFetch(
         if (e instanceof UrlValidationError) throw e;
         throw new UrlValidationError("Redirect to an invalid URL.");
       }
+      // Don't follow a redirect off the user's own site — we'd otherwise fetch
+      // and (in the crawler) score a third party's HTML as the subject's.
+      if (opts.sameOriginAs && next.origin !== opts.sameOriginAs) {
+        return { status: res.status, ok: false, contentType: "", body: "", finalUrl: next.toString(), isHtml: false };
+      }
       url = next;
       hops += 1;
       continue;
@@ -81,23 +86,30 @@ export async function politeFetch(
 }
 
 async function readCapped(res: Response, maxBytes: number): Promise<string> {
-  if (!res.body) return (await res.text()).slice(0, maxBytes);
+  const decode = (bytes: Uint8Array) => new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  if (!res.body) {
+    const enc = new TextEncoder().encode(await res.text());
+    return decode(enc.subarray(0, maxBytes));
+  }
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    if (value) {
-      chunks.push(value);
-      total += value.length;
-      if (total >= maxBytes) {
-        await reader.cancel().catch(() => {});
-        break;
-      }
+    if (!value) continue;
+    const remaining = maxBytes - total;
+    if (value.length >= remaining) {
+      // Truncate the final chunk to the exact remaining byte budget (no overshoot).
+      chunks.push(value.subarray(0, remaining));
+      total = maxBytes;
+      await reader.cancel().catch(() => {});
+      break;
     }
+    chunks.push(value);
+    total += value.length;
   }
-  return new TextDecoder("utf-8", { fatal: false }).decode(concat(chunks)).slice(0, maxBytes);
+  return decode(concat(chunks));
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {

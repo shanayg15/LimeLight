@@ -54,7 +54,11 @@ export async function crawlSite(rawUrl: string, opts: CrawlOptions = {}): Promis
   let robots: RobotsRules = { groups: [], sitemaps: [] };
   let robotsFetched = false;
   try {
-    const r = await politeFetch(new URL("/robots.txt", origin).toString(), { timeoutMs: 6000, maxBytes: 500_000 });
+    const r = await politeFetch(new URL("/robots.txt", origin).toString(), {
+      timeoutMs: 6000,
+      maxBytes: 500_000,
+      sameOriginAs: origin,
+    });
     if (r.ok && r.body) {
       robots = parseRobots(r.body);
       robotsFetched = true;
@@ -67,7 +71,11 @@ export async function crawlSite(rawUrl: string, opts: CrawlOptions = {}): Promis
   let hasSitemap = robots.sitemaps.length > 0;
   if (!hasSitemap) {
     try {
-      const s = await politeFetch(new URL("/sitemap.xml", origin).toString(), { timeoutMs: 5000, maxBytes: 100_000 });
+      const s = await politeFetch(new URL("/sitemap.xml", origin).toString(), {
+        timeoutMs: 5000,
+        maxBytes: 100_000,
+        sameOriginAs: origin,
+      });
       hasSitemap = s.ok && /<(urlset|sitemapindex)/i.test(s.body);
     } catch {
       /* ignore */
@@ -87,18 +95,28 @@ export async function crawlSite(rawUrl: string, opts: CrawlOptions = {}): Promis
       break;
     }
     const next = queue.shift()!;
-    const path = new URL(next).pathname || "/";
+    const nextUrl = new URL(next);
+    // Match robots rules against path + query (rules like `Disallow: /*?` rely on it).
+    const path = (nextUrl.pathname || "/") + nextUrl.search;
     if (robotsFetched && !isPathAllowed(robots, path, CRAWLER_UA_TOKEN)) {
       continue; // politeness: skip disallowed paths
     }
 
     let res;
     try {
-      res = await politeFetch(next, { timeoutMs: perPageTimeoutMs });
+      res = await politeFetch(next, { timeoutMs: perPageTimeoutMs, sameOriginAs: origin });
     } catch {
       continue; // SSRF-blocked or network error on this link — skip it
     }
     if (!res.ok || !res.isHtml || !res.body) continue;
+    // Belt-and-suspenders: never parse a page whose final URL left our origin.
+    let finalOrigin: string;
+    try {
+      finalOrigin = new URL(res.finalUrl).origin;
+    } catch {
+      continue;
+    }
+    if (finalOrigin !== origin) continue;
 
     const page = parseHtml(res.body, res.finalUrl, origin);
     pages.push(page);

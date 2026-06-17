@@ -3,10 +3,17 @@ export function ReadinessGauge({ score, readable }: { score: number; readable: b
   const r = 52;
   const circ = Math.PI * r; // half-circle arc length
   const pct = Math.max(0, Math.min(100, score)) / 100;
-  const dash = circ * pct;
+  // An unreadable site reads as negative regardless of any residual score, so the
+  // arc/color matches the "Unreadable" verdict rather than showing a hopeful amber.
+  const dash = readable ? circ * pct : circ * 0.04;
 
-  const tone =
-    score >= 70 ? "var(--positive)" : score >= 40 ? "var(--primary)" : "var(--negative)";
+  const tone = !readable
+    ? "var(--negative)"
+    : score >= 70
+      ? "var(--positive)"
+      : score >= 40
+        ? "var(--primary)"
+        : "var(--negative)";
   const label = score >= 70 ? "Strong" : score >= 40 ? "Needs work" : "Weak";
 
   return (

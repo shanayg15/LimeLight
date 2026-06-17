@@ -43,7 +43,18 @@ const WEIGHTS: Record<SiteAuditArea, number> = {
 const ENTITY_SCHEMA_TYPES = /^(person|organization|localbusiness|product|article|website|profilepage)$/i;
 
 function hasType(pages: PageData[], re: RegExp): boolean {
-  return pages.some((p) => p.jsonLd.some((b) => b.valid && b.types.some((t) => re.test(t))));
+  return pages.some((p) => p.jsonLd.some((b) => b.parsedWithType && b.types.some((t) => re.test(t))));
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Word-boundary presence test so "AI" doesn't match "email"/"detail". */
+function termPresent(haystack: string, term: string): boolean {
+  const t = term.trim().toLowerCase();
+  if (!t) return false;
+  return new RegExp(`(^|[^a-z0-9])${escapeRegExp(t)}([^a-z0-9]|$)`, "i").test(haystack);
 }
 
 /** Floor for "this page has real server-rendered text we could read". */
@@ -61,8 +72,7 @@ export function computeTopicCoverage(pages: PageData[], topics: string[]): Recor
     .join(" \n ");
   const out: Record<string, boolean> = {};
   for (const topic of topics) {
-    const t = topic.trim().toLowerCase();
-    out[topic] = t.length > 0 && haystack.includes(t);
+    out[topic] = termPresent(haystack, topic);
   }
   return out;
 }
@@ -112,7 +122,7 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
   // ── schema (25) ──────────────────────────────────────────────────────────
   let schema = 0;
   const anyJsonLd = pages.some((p) => p.jsonLd.length > 0);
-  const anyValid = pages.some((p) => p.jsonLd.some((b) => b.valid));
+  const anyParsedSchema = pages.some((p) => p.jsonLd.some((b) => b.parsedWithType));
   const hasEntity = hasType(pages, ENTITY_SCHEMA_TYPES);
   const hasFaqSchema = hasType(pages, /faqpage|qapage/i);
   if (!anyJsonLd) {
@@ -123,7 +133,7 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
       message: "No structured data (JSON-LD) found.",
       evidence: "Add JSON-LD (Person/Organization/Product, plus FAQPage). It's the clearest signal AI uses to identify and cite you.",
     });
-  } else if (!anyValid) {
+  } else if (!anyParsedSchema) {
     schema = 0.2;
     findings.push({
       id: "invalid-schema",
@@ -239,7 +249,8 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
       evidence: "Add concise meta descriptions — they're used as answer snippets.",
     });
   if (hasCanonical) fetchability += 0.05;
-  const noindex = readablePages.find((p) => p.robotsMeta && /noindex/i.test(p.robotsMeta));
+  // Scan ALL fetched pages for noindex — a deindexed thin/JS page must still penalize.
+  const noindex = pages.find((p) => p.robotsMeta && /noindex/i.test(p.robotsMeta));
   if (noindex) {
     fetchability = Math.max(0, fetchability - 0.3);
     findings.push({
@@ -284,8 +295,9 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
   // ── topic coverage (10) — coarse keyword/heading presence ───────────────────
   const topicCoverage = computeTopicCoverage(pages, subject.topics);
   const topics = subject.topics.filter((t) => t.trim());
-  let topicScore = 1;
-  if (topics.length > 0) {
+  const hasTopics = topics.length > 0;
+  let topicScore = 0;
+  if (hasTopics) {
     const covered = topics.filter((t) => topicCoverage[t]).length;
     topicScore = covered / topics.length;
     const missing = topics.filter((t) => !topicCoverage[t]);
@@ -308,11 +320,13 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
     topics: topicScore,
   };
 
-  const weighted = (Object.keys(WEIGHTS) as SiteAuditArea[]).reduce(
-    (sum, area) => sum + categoryScores[area] * WEIGHTS[area],
-    0,
-  );
-  const aiReadinessScore = Math.round(weighted);
+  // Weighted sum over only the categories that apply. With no topics, the topics
+  // weight is dropped and the remainder renormalized to 100 — an absent dimension
+  // never banks free points (which would inflate an unreadable site's score).
+  const activeAreas = (Object.keys(WEIGHTS) as SiteAuditArea[]).filter((a) => a !== "topics" || hasTopics);
+  const totalWeight = activeAreas.reduce((sum, a) => sum + WEIGHTS[a], 0);
+  const weighted = activeAreas.reduce((sum, a) => sum + categoryScores[a] * WEIGHTS[a], 0);
+  const aiReadinessScore = Math.round((weighted / totalWeight) * 100);
 
   // Stable severity-then-area ordering for display.
   const sevRank = { high: 0, med: 1, low: 2 } as const;

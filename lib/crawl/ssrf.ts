@@ -49,21 +49,65 @@ export function isPrivateIPv4(s: string): boolean {
   return false;
 }
 
+/**
+ * Expand an IPv6 literal to its 8 16-bit words, resolving `::` compression and
+ * any embedded dotted IPv4 (e.g. ::ffff:127.0.0.1). Returns null if not IPv6.
+ * Parsing to words means textual form (dotted vs hex, e.g. `::ffff:7f00:1`)
+ * can't be used to dodge the range checks.
+ */
+function ipv6Words(s: string): number[] | null {
+  let h = s.trim().toLowerCase();
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
+  h = h.split("%")[0]; // drop a zone id (fe80::1%eth0)
+  if (!h.includes(":")) return null;
+
+  // Fold a trailing dotted IPv4 into two hex words so word parsing is uniform.
+  const v4m = h.match(/^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4m) {
+    const o = [v4m[2], v4m[3], v4m[4], v4m[5]].map(Number);
+    if (o.some((n) => n > 255)) return null;
+    h = `${v4m[1]}${(((o[0] << 8) | o[1]) >>> 0).toString(16)}:${(((o[2] << 8) | o[3]) >>> 0).toString(16)}`;
+  }
+
+  const halves = h.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 ? (halves[1] ? halves[1].split(":") : []) : null;
+
+  let groups: string[];
+  if (tail === null) {
+    groups = head;
+  } else {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return null;
+    groups = [...head, ...Array(fill).fill("0"), ...tail];
+  }
+  if (groups.length !== 8) return null;
+  const words = groups.map((g) => (g === "" ? 0 : parseInt(g, 16)));
+  if (words.some((w) => Number.isNaN(w) || w < 0 || w > 0xffff)) return null;
+  return words;
+}
+
 /** True if `s` is a loopback/private/link-local IPv6 literal (brackets allowed). */
 export function isBlockedIPv6(s: string): boolean {
-  let h = s.trim();
-  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
-  // Strip a zone id (fe80::1%eth0).
-  h = h.split("%")[0];
-  if (!h.includes(":")) return false;
-  const low = h.toLowerCase();
-  if (low === "::1" || low === "::") return true; // loopback / unspecified
-  if (low.startsWith("fe8") || low.startsWith("fe9") || low.startsWith("fea") || low.startsWith("feb"))
-    return true; // fe80::/10 link-local
-  if (low.startsWith("fc") || low.startsWith("fd")) return true; // fc00::/7 unique-local
-  // IPv4-mapped (::ffff:127.0.0.1) — check the embedded v4.
-  const v4 = low.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (low.startsWith("::ffff:") && v4 && isPrivateIPv4(v4[1])) return true;
+  const w = ipv6Words(s);
+  if (!w) return false;
+
+  if (w.every((x) => x === 0)) return true; // :: unspecified
+  if (w.slice(0, 7).every((x) => x === 0) && w[7] === 1) return true; // ::1 loopback
+  if ((w[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
+  if ((w[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+
+  // Embedded IPv4 in the low 32 bits: mapped (::ffff:0:0/96), IPv4-compatible
+  // (::/96) and NAT64 (64:ff9b::/96) — block when the embedded v4 is private.
+  const high96Zero = w[0] === 0 && w[1] === 0 && w[2] === 0 && w[3] === 0 && w[4] === 0;
+  const mapped = high96Zero && w[5] === 0xffff;
+  const compat = high96Zero && w[5] === 0;
+  const nat64 = w[0] === 0x0064 && w[1] === 0xff9b && w[2] === 0 && w[3] === 0 && w[4] === 0 && w[5] === 0;
+  if (mapped || compat || nat64) {
+    const v4 = `${(w[6] >> 8) & 0xff}.${w[6] & 0xff}.${(w[7] >> 8) & 0xff}.${w[7] & 0xff}`;
+    if (isPrivateIPv4(v4)) return true;
+  }
   return false;
 }
 
@@ -102,7 +146,8 @@ export function validatePublicUrl(raw: string): URL {
     throw new UrlValidationError(`Only http(s) URLs can be crawled (got ${url.protocol}).`);
   }
 
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // Strip brackets and a trailing FQDN dot ("localhost." resolves like "localhost").
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   if (!host) throw new UrlValidationError("Missing hostname.");
   if (BLOCKED_HOSTNAMES.has(host)) throw new UrlValidationError("Refusing to crawl a loopback host.");
   if (BLOCKED_SUFFIXES.some((s) => host.endsWith(s))) {
@@ -120,7 +165,7 @@ export function validatePublicUrl(raw: string): URL {
  * not in evals. Throws UrlValidationError on a blocked address.
  */
 export async function assertResolvesPublic(hostname: string): Promise<void> {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   if (isBlockedIpLiteral(host)) {
     throw new UrlValidationError("Refusing to connect to a private/loopback IP.");
   }
