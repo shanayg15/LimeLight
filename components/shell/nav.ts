@@ -7,6 +7,7 @@ import {
   FileText,
   TrendingUp,
   Bot,
+  BarChart3,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -32,6 +33,7 @@ export const navItems: NavItem[] = [
   { label: "Actions", href: "/app/actions", icon: Sparkles, enabled: true },
   { label: "Content", href: "/app/content", icon: FileText, enabled: true },
   { label: "Tracking", href: "/app/tracking", icon: TrendingUp, enabled: true },
-  { label: "Assistant", href: "/app/assistant", icon: Bot, enabled: false },
+  { label: "Assistant", href: "/app/assistant", icon: Bot, enabled: true },
+  { label: "Analytics", href: "/app/analytics", icon: BarChart3, enabled: true },
   { label: "Settings", href: "/app/settings", icon: Settings, enabled: true },
 ];
