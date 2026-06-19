@@ -22,6 +22,8 @@ export function SourcesView({ data }: { data: SourceAnalysis }) {
 
   return (
     <div className="space-y-8">
+      <CitationShare domains={domains} />
+
       {enginesPresent.length > 1 && (
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Engine:</span>
@@ -115,6 +117,73 @@ export function SourcesView({ data }: { data: SourceAnalysis }) {
         )}
       </section>
     </div>
+  );
+}
+
+const UGC_DOMAINS = ["reddit.com", "youtube.com", "quora.com", "stackoverflow.com", "stackexchange.com", "news.ycombinator.com", "medium.com", "substack.com", "x.com", "twitter.com", "linkedin.com", "tiktok.com"];
+const isUgc = (d: string) => UGC_DOMAINS.some((u) => d === u || d.endsWith(`.${u}`));
+
+/** Citation share by source type — computed from the run's real cited-domain counts. */
+function CitationShare({ domains }: { domains: SourceAnalysis["topDomains"] }) {
+  const buckets = useMemo(() => {
+    let yours = 0;
+    let ugc = 0;
+    let third = 0;
+    for (const d of domains) {
+      if (d.isYours) yours += d.count;
+      else if (isUgc(d.domain)) ugc += d.count;
+      else third += d.count;
+    }
+    return { yours, ugc, third, total: yours + ugc + third };
+  }, [domains]);
+
+  if (buckets.total === 0) return null;
+  const seg = [
+    { label: "Yours", v: buckets.yours, color: "var(--positive)" },
+    { label: "Third-party", v: buckets.third, color: "var(--primary)" },
+    { label: "UGC / forums", v: buckets.ugc, color: "var(--chart-3)" },
+  ].filter((s) => s.v > 0);
+
+  const C = 2 * Math.PI * 32;
+  let acc = 0;
+  const yoursPct = Math.round((buckets.yours / buckets.total) * 100);
+
+  return (
+    <section className="grid gap-4 rounded-xl border border-border bg-card p-5 sm:grid-cols-[auto_1fr]">
+      <div className="flex flex-col items-center">
+        <svg viewBox="0 0 80 80" className="w-28" role="img" aria-label={`${yoursPct}% of citations are yours`}>
+          <circle cx="40" cy="40" r="32" fill="none" stroke="var(--secondary)" strokeWidth="12" />
+          {seg.map((s) => {
+            const len = (s.v / buckets.total) * C;
+            const el = (
+              <circle key={s.label} cx="40" cy="40" r="32" fill="none" stroke={s.color} strokeWidth="12" strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-acc} transform="rotate(-90 40 40)" />
+            );
+            acc += len;
+            return el;
+          })}
+          <text x="40" y="38" textAnchor="middle" className="fill-foreground" fontSize="15" fontWeight="600">{yoursPct}%</text>
+          <text x="40" y="50" textAnchor="middle" className="fill-muted-foreground" fontSize="7">yours</text>
+        </svg>
+      </div>
+      <div className="min-w-0">
+        <h2 className="text-base font-semibold">Citation share by source type</h2>
+        <p className="text-sm text-muted-foreground">
+          Of the {buckets.total} search-grounded citations in this run, {yoursPct}% point to your own domain.
+        </p>
+        <ul className="mt-3 space-y-1.5">
+          {seg.map((s) => (
+            <li key={s.label} className="flex items-center gap-2 text-sm">
+              <span className="size-2.5 rounded-full" style={{ background: s.color }} />
+              <span className="w-28 text-muted-foreground">{s.label}</span>
+              <span className="h-2 flex-1 overflow-hidden rounded-full bg-secondary">
+                <span className="block h-full rounded-full" style={{ width: `${(s.v / buckets.total) * 100}%`, background: s.color }} />
+              </span>
+              <span className="w-10 text-right text-xs text-muted-foreground">{Math.round((s.v / buckets.total) * 100)}%</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }
 
