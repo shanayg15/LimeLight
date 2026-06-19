@@ -61,45 +61,46 @@
   (root layout sets <html class="dark">); both :root and .dark carry the
   same dark palette so the brand reads correctly regardless of the class.
 */
+/* Light theme — warm off-white canvas + orange accent (AEO look-alike). */
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.15 0.008 80);
-  --foreground: oklch(0.96 0.008 85);
-  --card: oklch(0.195 0.01 80);
-  --card-foreground: oklch(0.96 0.008 85);
-  --popover: oklch(0.195 0.01 80);
-  --popover-foreground: oklch(0.96 0.008 85);
-  --primary: oklch(0.81 0.15 78);
-  --primary-foreground: oklch(0.2 0.03 80);
-  --secondary: oklch(0.26 0.012 80);
-  --secondary-foreground: oklch(0.96 0.008 85);
-  --muted: oklch(0.255 0.01 80);
-  --muted-foreground: oklch(0.72 0.015 85);
-  --accent: oklch(0.28 0.015 80);
-  --accent-foreground: oklch(0.96 0.008 85);
-  --destructive: oklch(0.62 0.21 25);
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.81 0.15 78);
-  --chart-1: oklch(0.81 0.15 78);
-  --chart-2: oklch(0.7 0.13 45);
-  --chart-3: oklch(0.68 0.12 200);
-  --chart-4: oklch(0.62 0.13 280);
-  --chart-5: oklch(0.72 0.14 330);
-  --positive: oklch(0.72 0.16 150);
-  --positive-foreground: oklch(0.18 0.02 150);
-  --neutral: oklch(0.72 0.015 85);
-  --neutral-foreground: oklch(0.18 0.01 85);
-  --negative: oklch(0.64 0.2 25);
-  --negative-foreground: oklch(0.98 0.01 25);
-  --sidebar: oklch(0.17 0.009 80);
-  --sidebar-foreground: oklch(0.92 0.008 85);
-  --sidebar-primary: oklch(0.81 0.15 78);
-  --sidebar-primary-foreground: oklch(0.2 0.03 80);
-  --sidebar-accent: oklch(0.26 0.012 80);
-  --sidebar-accent-foreground: oklch(0.96 0.008 85);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.81 0.15 78);
+  --background: oklch(0.985 0.003 80);
+  --foreground: oklch(0.21 0.012 80);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.012 80);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.012 80);
+  --primary: oklch(0.64 0.2 38);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.965 0.004 80);
+  --secondary-foreground: oklch(0.3 0.012 80);
+  --muted: oklch(0.965 0.004 80);
+  --muted-foreground: oklch(0.552 0.012 80);
+  --accent: oklch(0.962 0.012 55);
+  --accent-foreground: oklch(0.3 0.012 80);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.918 0.004 80);
+  --input: oklch(0.9 0.005 80);
+  --ring: oklch(0.64 0.2 38);
+  --chart-1: oklch(0.64 0.2 38);
+  --chart-2: oklch(0.72 0.15 62);
+  --chart-3: oklch(0.58 0.1 200);
+  --chart-4: oklch(0.54 0.16 280);
+  --chart-5: oklch(0.6 0.2 350);
+  --positive: oklch(0.58 0.15 150);
+  --positive-foreground: oklch(0.99 0 0);
+  --neutral: oklch(0.55 0.012 80);
+  --neutral-foreground: oklch(0.99 0 0);
+  --negative: oklch(0.58 0.22 27);
+  --negative-foreground: oklch(0.99 0 0);
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.35 0.012 80);
+  --sidebar-primary: oklch(0.64 0.2 38);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.965 0.004 80);
+  --sidebar-accent-foreground: oklch(0.21 0.012 80);
+  --sidebar-border: oklch(0.918 0.004 80);
+  --sidebar-ring: oklch(0.64 0.2 38);
 }
 
 .dark {
@@ -151,10 +152,10 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* faint amber spotlight from the top — the "limelight". */
+    /* faint warm wash from the top — the "limelight". */
     background-image: radial-gradient(
-      55rem 38rem at 50% -12%,
-      oklch(0.81 0.15 78 / 0.1),
+      55rem 38rem at 50% -14%,
+      oklch(0.7 0.18 45 / 0.06),
       transparent 70%
     );
     background-attachment: fixed;

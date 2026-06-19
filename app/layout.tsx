@@ -29,15 +29,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    // Dark-by-default brand theme (near-black canvas + amber accent).
+    // Light brand theme (warm off-white canvas + orange accent).
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full">
         <TooltipProvider delay={200}>{children}</TooltipProvider>
-        <Toaster theme="dark" richColors position="top-center" />
+        <Toaster theme="light" richColors position="top-center" />
       </body>
     </html>
   );
